@@ -70,6 +70,27 @@ def _install() -> None:
     llm_active = _activate_traceloop()
     install_linker(lineage_enabled=lineage_active, llm_enabled=llm_active)
 
+    # Register our SpanProcessor on the global TracerProvider so that
+    # every OTel span (whether emitted by Traceloop, OpenInference, or
+    # user code) flows through our linker.
+    try:
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace import TracerProvider
+
+        provider = trace.get_tracer_provider()
+        if isinstance(provider, TracerProvider):
+            from rudriq.processors import RudriQSpanProcessor
+            provider.add_span_processor(RudriQSpanProcessor())
+            _LOG.info("RudriQ SpanProcessor registered with global TracerProvider.")
+        else:
+            _LOG.warning(
+                "Global TracerProvider is not an SDK TracerProvider; "
+                "RudriQSpanProcessor not registered. "
+                "Call rudriq.auto.install_processor(provider) manually."
+            )
+    except Exception as exc:  # noqa: BLE001
+        _LOG.warning("Failed to install RudriQ SpanProcessor: %s", exc)
+
     _INSTALLED = True
 
     if not lineage_active and not llm_active:
@@ -77,6 +98,17 @@ def _install() -> None:
             "RudriQ: Neither AutoLineage nor Traceloop is installed. "
             "Install with: pip install 'rudriq[all]'"
         )
+
+
+def install_processor(provider) -> None:
+    """
+    Public helper for users with a custom TracerProvider setup.
+
+    Call this after creating your own TracerProvider but before
+    importing rudriq.auto, or after if you set up your provider later.
+    """
+    from rudriq.processors import RudriQSpanProcessor
+    provider.add_span_processor(RudriQSpanProcessor())
 
 
 _install()

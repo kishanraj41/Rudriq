@@ -56,7 +56,7 @@ def _sample_graph(run_id: str = "run-1") -> TraceGraph:
 
 def test_save_and_load_round_trips(temp_db: DuckDBStorage) -> None:
     original = _sample_graph()
-    temp_db.save_run(original)
+    temp_db.replace_run(original)
     loaded = temp_db.load_run("run-1")
 
     assert loaded is not None
@@ -72,32 +72,32 @@ def test_load_missing_run_returns_none(temp_db: DuckDBStorage) -> None:
 
 
 def test_find_nodes_by_hash(temp_db: DuckDBStorage) -> None:
-    temp_db.save_run(_sample_graph())
+    temp_db.replace_run(_sample_graph())
     matches = temp_db.find_nodes_by_hash("hash-A")
     assert len(matches) == 1
     assert matches[0] == ("run-1", "n1")
 
 
 def test_find_nodes_by_hash_returns_empty_for_unknown(temp_db: DuckDBStorage) -> None:
-    temp_db.save_run(_sample_graph())
+    temp_db.replace_run(_sample_graph())
     assert temp_db.find_nodes_by_hash("hash-DOES-NOT-EXIST") == []
 
 
 def test_list_runs_returns_in_recent_order(temp_db: DuckDBStorage) -> None:
     g1 = _sample_graph("run-1")
     g2 = _sample_graph("run-2")
-    temp_db.save_run(g1)
-    temp_db.save_run(g2)
+    temp_db.replace_run(g1)
+    temp_db.replace_run(g2)
 
     runs = temp_db.list_runs()
     assert "run-1" in runs
     assert "run-2" in runs
 
 
-def test_save_run_is_idempotent(temp_db: DuckDBStorage) -> None:
+def test_replace_run_is_idempotent(temp_db: DuckDBStorage) -> None:
     g = _sample_graph()
-    temp_db.save_run(g)
-    temp_db.save_run(g)  # second time should not error or duplicate
+    temp_db.replace_run(g)
+    temp_db.replace_run(g)  # second time should not error or duplicate
     loaded = temp_db.load_run("run-1")
     assert loaded is not None
     assert len(loaded.nodes) == 2
@@ -116,7 +116,7 @@ def test_timestamps_preserve_utc_on_roundtrip(temp_db: DuckDBStorage) -> None:
         started_at=saved_at,
         ended_at=saved_at,
     ))
-    temp_db.save_run(g)
+    temp_db.replace_run(g)
     loaded = temp_db.load_run("tz-test")
 
     assert loaded is not None
@@ -156,9 +156,29 @@ def test_find_nodes_by_hash_returns_most_recent_first(
         ended_at=base + timedelta(seconds=20),
         content_hash="shared-hash",
     ))
-    temp_db.save_run(g)
+    temp_db.replace_run(g)
 
     matches = temp_db.find_nodes_by_hash("shared-hash")
     assert len(matches) == 3
     assert matches[0][1] == "newest"   # most recent FIRST
     assert matches[2][1] == "oldest"   # oldest LAST
+
+
+def test_save_run_emits_deprecation_warning(temp_db: DuckDBStorage) -> None:
+    """save_run is preserved as a deprecated alias for replace_run."""
+    import warnings
+
+    g = _sample_graph(run_id="deprecation-test")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        temp_db.save_run(g)
+
+    assert any(
+        issubclass(w.category, DeprecationWarning)
+        and "save_run is deprecated" in str(w.message)
+        for w in caught
+    )
+    # And it still works correctly under the hood.
+    loaded = temp_db.load_run("deprecation-test")
+    assert loaded is not None
+    assert len(loaded.nodes) == 2

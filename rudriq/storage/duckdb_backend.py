@@ -131,8 +131,45 @@ class DuckDBStorage:
 
     # -- writes --------------------------------------------------------
 
-    def save_run(self, graph: TraceGraph) -> None:
-        """Persist a full TraceGraph to DuckDB. Idempotent."""
+    def ensure_run(
+        self,
+        run_id: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """
+        Ensure a run row exists, but never touch its nodes or edges.
+
+        Idempotent. Calling ensure_run on an already-existing run_id is a
+        no-op — the metadata argument is only honored on the FIRST call
+        that creates the row. To update metadata on an existing run, use
+        update_run_metadata (not yet implemented; v0.1).
+
+        Called by long-running components (the SpanProcessor, AutoLineage
+        hooks) that incrementally append nodes and edges over the lifetime
+        of a single run. Unlike replace_run, this is purely additive:
+        existing nodes and edges under run_id are untouched.
+        """
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO runs VALUES (?, ?, ?)",
+                [
+                    run_id,
+                    _ensure_utc(datetime.now(timezone.utc)),
+                    json.dumps(metadata or {}),
+                ],
+            )
+
+    def replace_run(self, graph: TraceGraph) -> None:
+        """
+        Authoritatively replace all state for graph.run_id.
+
+        DESTRUCTIVE: deletes any existing edges under this run_id before
+        inserting the new ones. Nodes are upserted (INSERT OR REPLACE) so
+        nodes from prior writes that aren't in the new graph are NOT
+        deleted — they remain orphaned. Use this when you have a complete
+        graph in hand and want to make storage match it; use ensure_run
+        + save_node + save_edge for incremental writes.
+        """
         with self._lock:
             self._conn.execute("BEGIN TRANSACTION")
             try:
@@ -188,6 +225,23 @@ class DuckDBStorage:
             except Exception:
                 self._conn.execute("ROLLBACK")
                 raise
+
+    def save_run(self, graph: TraceGraph) -> None:
+        """
+        DEPRECATED: use replace_run for destructive writes, or
+        ensure_run + save_node + save_edge for incremental writes.
+
+        Retained as a thin alias for backward compatibility. Will be
+        removed in v0.1.
+        """
+        import warnings
+        warnings.warn(
+            "save_run is deprecated; use replace_run for destructive "
+            "writes or ensure_run + save_node + save_edge for incremental.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.replace_run(graph)
 
     def save_node(self, node: TraceNode, run_id: str) -> None:
         """Append a single node to an existing or implicit run."""

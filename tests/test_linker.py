@@ -100,7 +100,7 @@ def test_link_by_content_hash_matches_persisted_node() -> None:
         started_at=datetime.now(timezone.utc),
         content_hash=payload_hash,
     ))
-    storage.save_run(g)
+    storage.replace_run(g)
 
     parent_id, method, conf = link_by_content_hash(payload, {})
     assert parent_id == "data-source"
