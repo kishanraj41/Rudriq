@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rudriq"
-version = "0.0.1.dev0"
+version = "0.0.2.dev0"
 description = "Connect LLM behavior to its upstream data lineage. Operation-level root-cause analysis across data pipelines and LLM calls."
 readme = "README.md"
 license = {text = "MIT"}
@@ -39,6 +39,7 @@ dependencies = [
     "opentelemetry-api>=1.27",
     "opentelemetry-sdk>=1.27",
     "opentelemetry-semantic-conventions>=0.48b0",
+    "duckdb>=0.10.0",
 ]
 
 [project.optional-dependencies]
