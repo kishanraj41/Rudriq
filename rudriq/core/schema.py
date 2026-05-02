@@ -190,22 +190,34 @@ def compute_content_hash(value: Any) -> str | None:
     """
     Compute a SHA-256 hash of ``value`` if it is feasibly hashable.
 
+    Hashes are type-tagged: compute_content_hash("1") and
+    compute_content_hash(1) return different hashes, even though
+    str(1) == "1". This prevents collisions across types where the
+    string representation overlaps.
+
     Returns None for objects whose serialization is unreasonably
     expensive (very large DataFrames, etc.) or who cannot be reduced
-    to a stable byte representation. Callers should treat None as
-    "no hash available" — link_by_content_hash will simply skip such
-    objects.
+    to a stable byte representation.
     """
     try:
         if value is None:
-            return hashlib.sha256(b"<None>").hexdigest()
-        if isinstance(value, (str, int, float, bool)):
-            return hashlib.sha256(str(value).encode("utf-8")).hexdigest()
+            return hashlib.sha256(b"none:").hexdigest()
+        if isinstance(value, bool):
+            # bool MUST come before int, because bool is a subclass of int
+            return hashlib.sha256(f"bool:{value}".encode("utf-8")).hexdigest()
+        if isinstance(value, int):
+            return hashlib.sha256(f"int:{value}".encode("utf-8")).hexdigest()
+        if isinstance(value, float):
+            return hashlib.sha256(f"float:{value!r}".encode("utf-8")).hexdigest()
+        if isinstance(value, str):
+            return hashlib.sha256(f"str:{value}".encode("utf-8")).hexdigest()
         if isinstance(value, bytes):
-            return hashlib.sha256(value).hexdigest()
+            h = hashlib.sha256(b"bytes:")
+            h.update(value)
+            return h.hexdigest()
         if isinstance(value, (list, tuple)):
-            # Hash the concatenation of element hashes.
-            h = hashlib.sha256()
+            tag = "list:" if isinstance(value, list) else "tuple:"
+            h = hashlib.sha256(tag.encode("utf-8"))
             for item in value:
                 item_hash = compute_content_hash(item)
                 if item_hash is None:
@@ -213,8 +225,8 @@ def compute_content_hash(value: Any) -> str | None:
                 h.update(item_hash.encode("utf-8"))
             return h.hexdigest()
         if isinstance(value, dict):
-            h = hashlib.sha256()
-            for k in sorted(value.keys()):
+            h = hashlib.sha256(b"dict:")
+            for k in sorted(value.keys(), key=lambda x: repr(x)):
                 k_hash = compute_content_hash(k)
                 v_hash = compute_content_hash(value[k])
                 if k_hash is None or v_hash is None:
@@ -222,12 +234,12 @@ def compute_content_hash(value: Any) -> str | None:
                 h.update(k_hash.encode("utf-8"))
                 h.update(v_hash.encode("utf-8"))
             return h.hexdigest()
-        # For pandas DataFrames, numpy arrays, etc., delegate to a
-        # repr-based hash. This is deliberately approximate: it's
-        # stable for typical analytical workloads but not bytewise.
+        # Fallback for pandas DataFrames, numpy arrays, etc.
         repr_bytes = repr(value).encode("utf-8")
         if len(repr_bytes) > 5_000_000:  # 5MB cap
             return None
-        return hashlib.sha256(repr_bytes).hexdigest()
+        h = hashlib.sha256(f"repr:{type(value).__name__}:".encode("utf-8"))
+        h.update(repr_bytes)
+        return h.hexdigest()
     except Exception:
         return None

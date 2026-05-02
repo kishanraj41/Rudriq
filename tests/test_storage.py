@@ -97,7 +97,68 @@ def test_list_runs_returns_in_recent_order(temp_db: DuckDBStorage) -> None:
 def test_save_run_is_idempotent(temp_db: DuckDBStorage) -> None:
     g = _sample_graph()
     temp_db.save_run(g)
-    temp_db.save_run(g)  # second time should not error
+    temp_db.save_run(g)  # second time should not error or duplicate
     loaded = temp_db.load_run("run-1")
     assert loaded is not None
     assert len(loaded.nodes) == 2
+    assert len(loaded.edges) == 1  # bug 1 regression: edges were duplicating
+
+
+def test_timestamps_preserve_utc_on_roundtrip(temp_db: DuckDBStorage) -> None:
+    """Bug 2 regression: UTC timezone must survive save -> load."""
+    saved_at = datetime(2026, 5, 1, 12, 30, 45, tzinfo=timezone.utc)
+    g = TraceGraph(run_id="tz-test", created_at=saved_at)
+    g.add_node(TraceNode(
+        node_id="tz-n1",
+        kind=NodeKind.DATA_READ,
+        library="pandas",
+        operation="read_csv",
+        started_at=saved_at,
+        ended_at=saved_at,
+    ))
+    temp_db.save_run(g)
+    loaded = temp_db.load_run("tz-test")
+
+    assert loaded is not None
+    assert loaded.created_at == saved_at  # same instant, regardless of tzinfo
+    # _from_db normalizes to UTC, not just any aware tzinfo, for audit
+    # consistency. Without astimezone, DuckDB returns the system local TZ.
+    assert loaded.created_at.utcoffset() == timezone.utc.utcoffset(loaded.created_at)
+    assert loaded.nodes[0].started_at == saved_at
+    assert loaded.nodes[0].ended_at == saved_at
+
+
+def test_find_nodes_by_hash_returns_most_recent_first(
+    temp_db: DuckDBStorage,
+) -> None:
+    """Bug 4 regression: ordering must be deterministic, most-recent first."""
+    from datetime import timedelta
+
+    base = datetime(2026, 5, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+    g = TraceGraph(run_id="r-multi", created_at=base)
+    g.add_node(TraceNode(
+        node_id="oldest",
+        kind=NodeKind.DATA_READ, library="pandas", operation="read_csv",
+        started_at=base, ended_at=base, content_hash="shared-hash",
+    ))
+    g.add_node(TraceNode(
+        node_id="middle",
+        kind=NodeKind.DATA_READ, library="pandas", operation="read_csv",
+        started_at=base + timedelta(seconds=10),
+        ended_at=base + timedelta(seconds=10),
+        content_hash="shared-hash",
+    ))
+    g.add_node(TraceNode(
+        node_id="newest",
+        kind=NodeKind.DATA_READ, library="pandas", operation="read_csv",
+        started_at=base + timedelta(seconds=20),
+        ended_at=base + timedelta(seconds=20),
+        content_hash="shared-hash",
+    ))
+    temp_db.save_run(g)
+
+    matches = temp_db.find_nodes_by_hash("shared-hash")
+    assert len(matches) == 3
+    assert matches[0][1] == "newest"   # most recent FIRST
+    assert matches[2][1] == "oldest"   # oldest LAST

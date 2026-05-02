@@ -14,9 +14,10 @@ Schema:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -35,7 +36,7 @@ from rudriq.core.schema import (
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS runs (
     run_id      VARCHAR PRIMARY KEY,
-    created_at  TIMESTAMP NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL,
     metadata    JSON
 );
 
@@ -45,8 +46,8 @@ CREATE TABLE IF NOT EXISTS nodes (
     kind          VARCHAR NOT NULL,
     library       VARCHAR NOT NULL,
     operation     VARCHAR NOT NULL,
-    started_at    TIMESTAMP NOT NULL,
-    ended_at      TIMESTAMP,
+    started_at    TIMESTAMPTZ NOT NULL,
+    ended_at      TIMESTAMPTZ,
     metadata      JSON,
     content_hash  VARCHAR
 );
@@ -77,6 +78,38 @@ def _default_db_path() -> Path:
     return home / "traces.duckdb"
 
 
+_LOG = logging.getLogger("rudriq.storage")
+
+
+def _ensure_utc(dt: datetime | None) -> datetime | None:
+    """Force a datetime to be timezone-aware UTC. Naive datetimes are
+    treated as UTC and a warning is emitted — callers should pass aware."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        _LOG.warning(
+            "Naive datetime received in storage layer; assuming UTC. "
+            "Callers should pass timezone-aware datetimes."
+        )
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _from_db(dt: datetime | None) -> datetime | None:
+    """Ensure datetimes returned from DuckDB are UTC-aware.
+
+    DuckDB TIMESTAMPTZ values are returned in the system local timezone
+    (the instant is preserved, but the tzinfo is local). We normalize to
+    UTC so downstream code never has to think about it. Naive datetimes
+    are also caught — those would only appear if the schema regressed
+    back to TIMESTAMP."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 class DuckDBStorage:
     """
     Embedded DuckDB-backed trace storage.
@@ -99,7 +132,7 @@ class DuckDBStorage:
     # -- writes --------------------------------------------------------
 
     def save_run(self, graph: TraceGraph) -> None:
-        """Persist a full TraceGraph to DuckDB."""
+        """Persist a full TraceGraph to DuckDB. Idempotent."""
         with self._lock:
             self._conn.execute("BEGIN TRANSACTION")
             try:
@@ -107,9 +140,18 @@ class DuckDBStorage:
                     "INSERT OR REPLACE INTO runs VALUES (?, ?, ?)",
                     [
                         graph.run_id,
-                        graph.created_at,
+                        _ensure_utc(graph.created_at),
                         json.dumps(graph.metadata),
                     ],
+                )
+                # Idempotency: clear edges for this run before re-inserting.
+                # Nodes use INSERT OR REPLACE (PK is node_id) so they're already
+                # idempotent. Edges have no natural primary key (a node can have
+                # multiple edges to the same parent with different metadata),
+                # so we delete-then-insert.
+                self._conn.execute(
+                    "DELETE FROM edges WHERE run_id = ?",
+                    [graph.run_id],
                 )
                 for node in graph.nodes:
                     self._conn.execute(
@@ -120,8 +162,8 @@ class DuckDBStorage:
                             node.kind.value,
                             node.library,
                             node.operation,
-                            node.started_at,
-                            node.ended_at,
+                            _ensure_utc(node.started_at),
+                            _ensure_utc(node.ended_at),
                             json.dumps(node.metadata),
                             node.content_hash,
                         ],
@@ -152,7 +194,7 @@ class DuckDBStorage:
         with self._lock:
             self._conn.execute(
                 "INSERT OR IGNORE INTO runs VALUES (?, ?, ?)",
-                [run_id, datetime.now(), "{}"],
+                [run_id, datetime.now(timezone.utc), "{}"],
             )
             self._conn.execute(
                 "INSERT OR REPLACE INTO nodes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -162,8 +204,8 @@ class DuckDBStorage:
                     node.kind.value,
                     node.library,
                     node.operation,
-                    node.started_at,
-                    node.ended_at,
+                    _ensure_utc(node.started_at),
+                    _ensure_utc(node.ended_at),
                     json.dumps(node.metadata),
                     node.content_hash,
                 ],
@@ -201,7 +243,7 @@ class DuckDBStorage:
             metadata = json.loads(row[2]) if row[2] else {}
             graph = TraceGraph(
                 run_id=row[0],
-                created_at=row[1],
+                created_at=_from_db(row[1]),
                 metadata=metadata,
             )
 
@@ -220,8 +262,8 @@ class DuckDBStorage:
                         kind=NodeKind(nr[1]),
                         library=nr[2],
                         operation=nr[3],
-                        started_at=nr[4],
-                        ended_at=nr[5],
+                        started_at=_from_db(nr[4]),
+                        ended_at=_from_db(nr[5]),
                         metadata=json.loads(nr[6]) if nr[6] else {},
                         content_hash=nr[7],
                     )
@@ -248,10 +290,22 @@ class DuckDBStorage:
             return graph
 
     def find_nodes_by_hash(self, content_hash: str) -> list[tuple[str, str]]:
-        """Return [(run_id, node_id), ...] of nodes with this content hash."""
+        """
+        Return [(run_id, node_id), ...] of nodes with this content hash,
+        ordered most-recent-first.
+
+        The linker takes the latest match when correlating an LLM call's
+        input to upstream data. Without explicit ordering, DuckDB makes
+        no guarantee, so we sort by started_at descending.
+        """
         with self._lock:
             rows = self._conn.execute(
-                "SELECT run_id, node_id FROM nodes WHERE content_hash = ?",
+                """
+                SELECT run_id, node_id
+                FROM nodes
+                WHERE content_hash = ?
+                ORDER BY started_at DESC
+                """,
                 [content_hash],
             ).fetchall()
             return [(r[0], r[1]) for r in rows]

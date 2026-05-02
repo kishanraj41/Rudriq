@@ -38,6 +38,30 @@ def test_content_hash_handles_lists() -> None:
     assert a != c
 
 
+def test_content_hash_type_tags_prevent_string_int_collision() -> None:
+    """Bug 3 regression: '1' and 1 must hash differently."""
+    assert compute_content_hash("1") != compute_content_hash(1)
+    assert compute_content_hash("1.0") != compute_content_hash(1.0)
+    assert compute_content_hash("True") != compute_content_hash(True)
+    # And bool/int distinction (bool is a subclass of int in Python)
+    assert compute_content_hash(True) != compute_content_hash(1)
+    assert compute_content_hash(False) != compute_content_hash(0)
+
+
+def test_content_hash_distinguishes_list_and_tuple() -> None:
+    """A list and tuple with same elements should hash differently."""
+    assert compute_content_hash([1, 2, 3]) != compute_content_hash((1, 2, 3))
+
+
+def test_content_hash_distinguishes_empty_collections() -> None:
+    """Empty list, tuple, dict, str must all differ."""
+    h_list = compute_content_hash([])
+    h_tuple = compute_content_hash(())
+    h_dict = compute_content_hash({})
+    h_str = compute_content_hash("")
+    assert len({h_list, h_tuple, h_dict, h_str}) == 4
+
+
 def test_trace_graph_roundtrips_to_dict() -> None:
     now = datetime.now(timezone.utc)
     g = TraceGraph(run_id="r", created_at=now)

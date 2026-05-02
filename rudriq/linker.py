@@ -93,9 +93,8 @@ def link_by_content_hash(
         storage = get_default_storage()
         matches = storage.find_nodes_by_hash(h)
         if matches:
-            # Take the most recent match. In v0.1 we'll add temporal
-            # locality and confidence weighting.
-            _, node_id = matches[-1]
+            # find_nodes_by_hash returns most-recent-first.
+            _, node_id = matches[0]
             return node_id, LinkMethod.CONTENT_HASH.value, 0.8
     except Exception as exc:  # noqa: BLE001
         _LOG.debug("content_hash match failed: %s", exc)
