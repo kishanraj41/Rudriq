@@ -55,14 +55,14 @@ llm = [
 lineage = [
     # Auto-registration of object identity into the linker requires
     # the register_assign_id_callback API added in autolineage 0.5.
-    # rudriq.auto degrades gracefully on older versions, but full
-    # functionality requires >=0.5.
-    "autolineage>=0.4",
+    # Pinned to the git tag for now; will switch to PyPI version
+    # ("autolineage>=0.5,<0.6") once 0.5.0 is published.
+    "autolineage @ git+https://github.com/kishanraj41/autolineage.git@v0.5.0",
 ]
 all = [
     "traceloop-sdk>=0.30",
     "openai>=1.0,<2.0",
-    "autolineage>=0.4",
+    "autolineage @ git+https://github.com/kishanraj41/autolineage.git@v0.5.0",
 ]
 dev = [
     "pytest>=7.0",
