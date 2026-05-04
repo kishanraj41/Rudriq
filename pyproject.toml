@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rudriq"
-version = "0.0.3.dev0"
+version = "0.0.4.dev0"
 description = "Connect LLM behavior to its upstream data lineage. Operation-level root-cause analysis across data pipelines and LLM calls."
 readme = "README.md"
 license = {text = "MIT"}
@@ -46,12 +46,22 @@ dependencies = [
 [project.optional-dependencies]
 llm = [
     "traceloop-sdk>=0.30",
+    # Pinned to a tested OpenAI SDK range. Our auto_capture module
+    # monkey-patches openai.resources.embeddings.Embeddings.create and
+    # openai.resources.chat.completions.Completions.create — internals
+    # the SDK occasionally reshapes between minor versions.
+    "openai>=1.0,<2.0",
 ]
 lineage = [
+    # Auto-registration of object identity into the linker requires
+    # the register_assign_id_callback API added in autolineage 0.5.
+    # rudriq.auto degrades gracefully on older versions, but full
+    # functionality requires >=0.5.
     "autolineage>=0.4",
 ]
 all = [
     "traceloop-sdk>=0.30",
+    "openai>=1.0,<2.0",
     "autolineage>=0.4",
 ]
 dev = [

@@ -18,7 +18,7 @@ both domains into a single unified trace, enabling cross-domain root-cause
 analysis when LLM behavior changes.
 """
 
-__version__ = "0.0.3.dev0"
+__version__ = "0.0.4.dev0"
 
 from rudriq.core.tracker import get_tracker
 from rudriq.analyzer.diagnose import diagnose
