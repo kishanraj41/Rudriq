@@ -185,19 +185,28 @@ def _compute_lineage_chains(graph: TraceGraph) -> list[dict[str, Any]]:
 
             node = nodes_by_id.get(node_id)
             if node is None:
-                # Cross-domain link to a node not in this run (e.g. a
-                # data node tracked by AutoLineage but not mirrored
-                # into RudriQ DuckDB yet — pre v0.0.5 mirroring).
-                # Surface it so the audit report still records the
-                # link, just with limited info.
+                # In v0.0.6+ AutoLineage records are mirrored into
+                # RudriQ DuckDB, so we shouldn't normally hit this
+                # path. If we do, the record exists in AutoLineage's
+                # tracker but wasn't mirrored — likely because the
+                # SpanProcessor wired its run_id AFTER the relevant
+                # AutoLineage record fired (callback ordering edge
+                # case), or autolineage<0.6 is installed.
                 chain.append({
                     "node_id": node_id,
                     "depth": depth,
                     "kind": "unknown",
                     "library": "external",
-                    "operation": "external",
+                    "operation": "unmirrored",
                     "started_at": None,
                     "metadata_keys": [],
+                    "_note": (
+                        "Record exists in AutoLineage but was not "
+                        "mirrored into RudriQ. Check that "
+                        "RudriQSpanProcessor was constructed before "
+                        "AutoLineage-tracked operations fired, and "
+                        "that autolineage>=0.6 is installed."
+                    ),
                 })
                 continue
 

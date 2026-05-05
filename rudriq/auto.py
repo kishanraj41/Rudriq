@@ -18,11 +18,174 @@ Importing this module is idempotent — calling it twice has no extra effect.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
+from typing import Any
 
 from rudriq.linker import install_linker
 
 _LOG = logging.getLogger("rudriq")
 _INSTALLED = False
+
+# Holds the run_id under which AutoLineage records get mirrored. Set by
+# RudriQSpanProcessor.__init__ so subsequently-captured AutoLineage records
+# land in the same run as the LLM spans. Module-level dict so the closure
+# in the callback can read the current value (rather than a stale captured
+# binding).
+_autolineage_run_id: dict[str, str | None] = {"value": None}
+
+
+def _set_autolineage_run_id(run_id: str | None) -> None:
+    """Wire the run_id under which AutoLineage records will be mirrored.
+
+    Called by RudriQSpanProcessor.__init__ so subsequently-captured
+    AutoLineage records land in the same run as our LLM spans. Audit
+    reports for in-process pipelines then show full upstream chains
+    without 'external' placeholders. Pass None to disable mirroring.
+    """
+    _autolineage_run_id["value"] = run_id
+
+
+# AutoLineage uses category strings ("io", "transform"); RudriQ uses
+# NodeKind enum. This mapping decides what each AL record becomes.
+_AL_READ_OPS = (
+    "read_csv", "read_parquet", "read_json", "read_excel", "read_sql",
+    "read_feather", "read_orc", "read_pickle", "read_table", "read_hdf",
+    "load", "from_pandas", "from_dict",
+)
+_AL_WRITE_OPS = (
+    "to_csv", "to_parquet", "to_json", "to_excel", "to_sql", "to_pickle",
+    "to_feather", "to_hdf", "to_orc", "save",
+)
+
+
+def _autolineage_record_to_node_kind(record: Any) -> Any:
+    """Map an AutoLineage TransformationRecord to a NodeKind."""
+    from rudriq.core.schema import NodeKind
+
+    category = getattr(record, "category", "") or ""
+    operation = getattr(record, "operation", "") or ""
+
+    if category == "io":
+        op_lower = operation.lower()
+        if any(w in op_lower for w in _AL_WRITE_OPS):
+            return NodeKind.DATA_WRITE
+        return NodeKind.DATA_READ
+    if category == "transform":
+        return NodeKind.DATA_TRANSFORM
+    if category == "model_train":
+        return NodeKind.MODEL_TRAIN
+    if category == "model_predict":
+        return NodeKind.MODEL_PREDICT
+    return NodeKind.UNKNOWN
+
+
+def _autolineage_record_to_started_at(record: Any) -> datetime:
+    """Derive a UTC datetime from the record's timestamp string.
+
+    AutoLineage's TransformationRecord.timestamp is set by
+    ``datetime.now().isoformat()`` — a NAIVE local-time string with no
+    tzinfo. Naively attaching tzinfo=UTC mislabels local-as-UTC and
+    produces timestamps 5+ hours off in non-UTC timezones. Instead,
+    interpret naive timestamps as local time (Python's
+    ``astimezone()`` semantics on a naive datetime) and convert to UTC.
+    """
+    ts = getattr(record, "timestamp", None)
+    if ts:
+        try:
+            parsed = datetime.fromisoformat(ts)
+            if parsed.tzinfo is None:
+                # Interpret as local; convert to UTC.
+                parsed = parsed.astimezone(timezone.utc)
+            else:
+                parsed = parsed.astimezone(timezone.utc)
+            return parsed
+        except (ValueError, TypeError):
+            pass
+    return datetime.now(timezone.utc)
+
+
+def _make_mirror_callback(al_tracker):
+    """Build a post-record callback that mirrors each AutoLineage record
+    as a TraceNode + parent DIRECT edges in RudriQ's DuckDB.
+
+    Closes over ``al_tracker`` so the callback can read tracker.nodes
+    metadata (shape, columns, content_hash) at fire time.
+    """
+    from rudriq.core.schema import EdgeKind, LinkMethod, TraceEdge, TraceNode
+
+    def _on_record(record):
+        run_id = _autolineage_run_id["value"]
+        if run_id is None:
+            # No SpanProcessor has wired its run_id yet. We skip
+            # mirroring rather than dump records into a default run
+            # that audit_export wouldn't find. The object_identity
+            # callback already fired separately for each output, so
+            # cross-domain linking still works.
+            return
+
+        try:
+            from rudriq.storage import get_default_storage
+            storage = get_default_storage()
+
+            child_id = getattr(record, "child_id", None)
+            if not child_id:
+                return
+
+            # Pull richer metadata from the AL tracker's nodes dict.
+            al_node = (al_tracker.nodes.get(child_id) or {}) if al_tracker else {}
+            metadata = dict(getattr(record, "metadata", {}) or {})
+            for key in ("shape", "columns", "content_hash", "source", "filepath"):
+                v = al_node.get(key)
+                if v is not None:
+                    metadata.setdefault(f"autolineage.{key}", v)
+
+            duration_ms = getattr(record, "duration_ms", None)
+            if duration_ms is not None:
+                metadata.setdefault("autolineage.duration_ms", duration_ms)
+
+            started_at = _autolineage_record_to_started_at(record)
+            if duration_ms:
+                from datetime import timedelta
+                ended_at = started_at + timedelta(milliseconds=float(duration_ms))
+            else:
+                ended_at = started_at
+
+            node = TraceNode(
+                node_id=child_id,
+                kind=_autolineage_record_to_node_kind(record),
+                library=getattr(record, "library", "autolineage") or "autolineage",
+                operation=getattr(record, "operation", "unknown") or "unknown",
+                started_at=started_at,
+                ended_at=ended_at,
+                metadata=metadata,
+                content_hash=al_node.get("content_hash"),
+            )
+
+            storage.ensure_run(run_id)
+            storage.save_node(node, run_id=run_id)
+
+            # Mirror parent_ids as DIRECT edges so the chain
+            # parent_op -> child_op is visible in audit reports.
+            for parent_id in (getattr(record, "parent_ids", None) or []):
+                if not parent_id:
+                    continue
+                storage.save_edge(
+                    TraceEdge(
+                        parent_id=parent_id,
+                        child_id=child_id,
+                        kind=EdgeKind.DIRECT,
+                        confidence=1.0,
+                        link_method=LinkMethod.UNKNOWN,
+                    ),
+                    run_id=run_id,
+                )
+        except Exception as exc:  # noqa: BLE001
+            _LOG.debug(
+                "RudriQ mirror callback failed for record %s: %s",
+                getattr(record, "child_id", "<unknown>"), exc,
+            )
+
+    return _on_record
 
 
 def _activate_autolineage() -> bool:
@@ -56,6 +219,27 @@ def _activate_autolineage() -> bool:
                 _LOG.info(
                     "RudriQ: auto-registration callback wired into AutoLineage."
                 )
+
+                # ALSO wire post-record mirroring (autolineage v0.6.0+).
+                # This persists each AutoLineage record as a TraceNode +
+                # parent->child DIRECT edges in RudriQ's DuckDB so audit
+                # reports show full upstream chains without 'external'
+                # placeholders.
+                if hasattr(tracker, "register_post_record_callback"):
+                    tracker.register_post_record_callback(
+                        _make_mirror_callback(tracker)
+                    )
+                    _LOG.info(
+                        "RudriQ: post-record mirroring callback wired "
+                        "(autolineage>=0.6)."
+                    )
+                else:
+                    _LOG.info(
+                        "RudriQ: AutoLineage<0.6 detected; mirroring disabled. "
+                        "Audit reports will show 'external' placeholders for "
+                        "data-side nodes. Upgrade autolineage to >=0.6 to "
+                        "enable in-DuckDB mirroring."
+                    )
             else:
                 _LOG.warning(
                     "RudriQ: AutoLineage version does not expose "

@@ -126,6 +126,19 @@ class RudriQSpanProcessor(SpanProcessor):
         self._run_initialized = False
         self._lock = threading.Lock()
 
+        # Wire our run_id into the AutoLineage mirroring callback so
+        # subsequently-captured AutoLineage records land in the same run
+        # as our LLM spans. Audit reports for in-process pipelines then
+        # show full upstream chains without 'external' placeholders.
+        # If rudriq.auto isn't imported yet (or autolineage isn't
+        # installed), this is a graceful no-op.
+        try:
+            import rudriq.auto as _auto
+            if hasattr(_auto, "_set_autolineage_run_id"):
+                _auto._set_autolineage_run_id(self._run_id)
+        except Exception:  # noqa: BLE001
+            pass
+
     @property
     def run_id(self) -> str:
         return self._run_id
@@ -153,6 +166,22 @@ class RudriQSpanProcessor(SpanProcessor):
         return
 
     def on_end(self, span: ReadableSpan) -> None:
+        # Wrap the entire on_end body in a defensive try/except. on_end is
+        # called by OpenTelemetry's MultiSpanProcessor, and a raise here
+        # can prevent SUBSEQUENT processors from firing (and in some OTel
+        # versions, crash the export pipeline). Observability must never
+        # break the user's code, and one stale SpanProcessor with a
+        # closed DuckDB handle (e.g., across pytest sessions where a
+        # prior test's fixture closed its DB) must not poison sibling
+        # processors. We log at DEBUG and move on.
+        try:
+            self._on_end_impl(span)
+        except Exception as exc:  # noqa: BLE001
+            _LOG.debug(
+                "RudriQSpanProcessor.on_end suppressed exception: %s", exc,
+            )
+
+    def _on_end_impl(self, span: ReadableSpan) -> None:
         self._ensure_run_exists()
 
         attrs = dict(span.attributes or {})
