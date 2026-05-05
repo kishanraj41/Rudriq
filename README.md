@@ -1,74 +1,134 @@
 # RudriQ
 
-> **Connect LLM behavior to its upstream data lineage.**
+> **Self-hosted, audit-grade evidence of why AI systems fail.**
+>
+> For regulated enterprises that cannot use cloud observability.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![Status](https://img.shields.io/badge/status-pre--alpha-orange.svg)](https://github.com/kishanraj41/rudriq)
+[![Tests](https://img.shields.io/badge/tests-78%20passing-success.svg)](https://github.com/kishanraj41/rudriq)
 
-When your AI system breaks, RudriQ walks back through your data pipeline to the operation that caused it.
+When your AI system fails — drifts, hallucinates, returns the wrong answer — the cause is usually upstream of the LLM call. RudriQ traces failures back to the data pipeline operations that caused them, and produces audit-grade evidence designed for EU AI Act compliance, litigation defense, and AI liability insurance underwriting.
 
-## The gap RudriQ fills
+![RudriQ audit report sample](docs/images/sample_audit_report.png)
 
-LLM observability tools (OpenLLMetry, Langfuse, Phoenix, LangSmith) tell you **what** happened in production: which prompt, which response, how many tokens. They are excellent at this and we recommend using them.
+<sub>_Representative output. Lineage chains shown reflect the v0.0.6+ feature set with AutoLineage records mirrored into RudriQ storage; v0.0.5 today produces the same format with cross-domain edges to AutoLineage's tracker. See [BACKLOG.md](BACKLOG.md)._</sub>
 
-Data lineage tools (AutoLineage, OpenLineage, Marquez) tell you **what happened upstream**: which CSV, which transform, which model artifact.
+## Why RudriQ
 
-**No tool connects the two.**
+LLM observability tools tell you what happened at the LLM call. They are excellent at this.
 
-When an LLM response changes between runs, the cause is usually upstream — a stale embedding index, a filter that dropped the wrong rows, a CSV that was refreshed without notice. RudriQ is the bridge that makes those upstream causes visible from your LLM trace.
+RudriQ is different in two specific ways:
 
-## Architecture
+1. **Cross-domain trace.** We connect data operations (pandas, scikit-learn, RAG retrieval) to LLM calls (OpenAI, Anthropic) into a single causal chain. Existing observability tools start at the LLM call; we start before it.
 
-RudriQ is a *bridge*, not a tracing library. It builds on top of:
-
-- **[OpenLLMetry](https://github.com/traceloop/openllmetry)** for LLM call instrumentation, emitted as OpenTelemetry GenAI semantic conventions.
-- **[AutoLineage](https://github.com/kishanraj41/autolineage)** for data pipeline instrumentation across pandas, scikit-learn, and PySpark.
-
-The novel contribution is the **linker** ([rudriq/linker.py](rudriq/linker.py)) which correlates spans from both domains into a single unified trace. The linker uses three matching strategies (object identity → content hash → name match), and annotates LLM spans with the upstream lineage operations that produced their input data.
+2. **Self-hosted, no cloud dependencies.** RudriQ runs entirely inside your VPC. DuckDB by default, zero outbound network calls in core. Designed for buyers in healthcare, financial services, and government who cannot use cloud-deployed observability tools.
 
 ## Quickstart
 
 ```bash
-pip install "rudriq[all]"     # OpenLLMetry + AutoLineage + linker
+pip install "rudriq[all]"
 ```
 
 ```python
-import rudriq.auto    # activates lineage tracking, LLM tracing, and the linker
+import rudriq.auto    # one import: lineage tracking + LLM tracing + linker
 
-# ... your existing pandas / scikit-learn / OpenAI / Anthropic / RAG code runs unchanged ...
+# Your existing code runs unchanged.
+import pandas as pd
+docs = pd.read_csv('docs.csv')
+docs = docs[docs['lang'] == 'en']
 
-from rudriq import diagnose
-print(diagnose(target_metric='answer_quality'))
+from openai import OpenAI
+client = OpenAI()
+embeddings = client.embeddings.create(
+    model='text-embedding-3-small',
+    input=docs['text'].tolist(),
+)
+
+# Generate the audit report — schema-versioned, deterministic.
+from rudriq.export.audit import export_audit_markdown
+print(export_audit_markdown(run_id))
 ```
 
-That's it. One import. Every pandas operation, every LLM call, every cross-domain link is in your unified trace.
+Or from the CLI:
 
-## What you can do with the unified trace
+```bash
+rudriq audit --run-id <id> --format markdown --output report.md
+```
 
-| Capability | Status |
-| --- | --- |
-| Cross-domain root-cause analysis (`rudriq diagnose`) | v0.2 (May 21) |
-| Audit report generation (`rudriq audit`) | v0.2 (May 27) |
-| Slack alerts on anomalies | Future |
-| Renders in Datadog / SigNoz / Jaeger / Langfuse / Phoenix | v0.1 (May 13) |
+## What you get
 
-## Roadmap
+A unified trace covering every data operation and every LLM call, with cross-domain causal links automatically attributed. Same data, two views — JSON for machine consumers, Markdown for an auditor reading the report directly.
 
-| Version | Target date | Highlights |
-| --- | --- | --- |
-| **v0.0.1** | May 6, 2026  | Foundation, linker spec, demo notebook (this release) |
-| v0.1.0 | May 13, 2026 | Linker implementation: object-identity + content-hash matching |
-| v0.2.0 | May 27, 2026 | Cross-domain root-cause analyzer, audit report exporter |
+```
+Run ID:     abc-123
+Schema:     rudriq.audit/1.0
+Started:    2026-05-04T14:00:00+00:00
+Total operations: 7  (data: 4, LLM: 2, other: 1)
+LLM call attribution: 2/2 linked to upstream
 
-## Why now
+LLM Lineage Chains
+  openai.embeddings.create
+    -> depth 1: pandas.filter        (rows: 1000 -> 250)
+    -> depth 2: pandas.read_csv      (path: docs.csv)
 
-In 2026, LLM observability is converging on OpenTelemetry GenAI semantic conventions. Data lineage tools have always emitted their own formats. The seam between the two is empty. RudriQ fills that seam, using the standard so you don't get locked in.
+  openai.chat.completions.create
+    -> depth 1: rudriq.prompt_assembly  (template: rag_v2)
+    -> depth 2: pandas.merge          (left: filtered_docs)
+    -> depth 3: openai.embeddings.create  (linked above)
+```
+
+Every operation, every parameter, every cross-domain link, in your local DuckDB. Deterministic: same trace produces byte-identical JSON across calls and across DuckDB instances. See [docs/sample_audit_report.md](docs/sample_audit_report.md) for a real exporter output.
+
+## Architecture
+
+RudriQ is OpenTelemetry-compatible, not OpenTelemetry-bound. We use OTel for ingestion (so we get [OpenLLMetry](https://github.com/traceloop/openllmetry)'s SDK coverage for free) and for export (so we work with your existing observability stack), but our internal data model is a richer canonical schema with first-class causal edges, lineage links across domains, and audit metadata.
+
+The cross-domain linker uses three matching strategies in order of confidence:
+
+| Strategy | Confidence | Mechanism |
+|---|---|---|
+| Object identity | 1.0 | Python `id()` of LLM input matches a tracked AutoLineage output |
+| Content hash | 0.8 | SHA-256 of input matches a recorded operation output |
+| Name match | 0.5 | Heuristic correlation by variable/column name (v0.1) |
+
+The first matching strategy wins. Match results are persisted as `LINEAGE_LINK` edges in the canonical TraceGraph and surfaced in audit reports. v0.0.4 added automatic registration so neither `register_object_identity` nor `record_llm_input` are visible in user code; the demo notebook is plain pandas + openai.
+
+The data lineage substrate is **[AutoLineage](https://github.com/kishanraj41/autolineage)** (v0.5+), which captures pandas, scikit-learn, and PySpark operations and exposes a callback API that RudriQ wires into.
+
+## Status: pre-alpha (v0.0.5)
+
+Currently in active 30-day sprint development. v1.0 target: November 2026.
+
+| Version | Target | Status |
+|---|---|---|
+| v0.0.5 | May 4, 2026 | ✅ Audit JSON + Markdown exporter (current) |
+| v0.0.6 | May 11, 2026 | 🚧 AutoLineage record mirroring; production Traceloop flow verification |
+| v0.2.0 | May 25, 2026 | ⏳ Evaluation engine + deviation-weighted root-cause analysis |
+| v0.3.0 | Jun 1, 2026 | ⏳ PDF export + design partner outreach |
+| v1.0.0 | Nov 2026 | ⏳ Air-gapped install, HIPAA BAA capable, SOC 2 Type II in progress |
+
+See [BACKLOG.md](BACKLOG.md) for tracked deferrals.
+
+## Run the demo
+
+```bash
+git clone https://github.com/kishanraj41/rudriq.git
+cd rudriq
+pip install -e ".[dev,llm,lineage]"
+pytest tests/ -v             # 78 passing
+jupyter notebook examples/rag_with_lineage.ipynb
+```
+
+The notebook executes a real pandas pipeline + a (mocked-offline) OpenAI call and produces the audit report at the end. No API keys required.
 
 ## License
 
-MIT — use it however you want.
+MIT. Use it however you want. Compliance buyers: a paid Enterprise tier with air-gapped install support, dedicated support, and certification path is in development for late 2026.
 
 ## Author
 
 Built by [Kishan Raj VG](https://github.com/kishanraj41) at RudriQ Research, Austin, TX.
+
+Co-author of [AutoLineage](https://github.com/kishanraj41/autolineage), the data lineage substrate RudriQ builds on. JOSS reviewer.
