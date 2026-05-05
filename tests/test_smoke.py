@@ -6,7 +6,7 @@ from __future__ import annotations
 def test_package_imports() -> None:
     import rudriq
 
-    assert rudriq.__version__ == "0.0.4.dev0"
+    assert rudriq.__version__ == "0.0.5.dev0"
     assert hasattr(rudriq, "get_tracker")
     assert hasattr(rudriq, "diagnose")
 
@@ -45,14 +45,17 @@ def test_diagnose_accepts_target_and_baseline() -> None:
     assert result["summary"]["has_baseline"] is True
 
 
-def test_audit_report_returns_default_structure() -> None:
-    from rudriq.export.audit import generate_audit_report
+def test_audit_report_returns_v005_structure() -> None:
+    """generate_audit_report (legacy API) returns the v0.0.5 audit shape."""
+    from rudriq.export.audit import generate_audit_report, AUDIT_SCHEMA_VERSION
 
     result = generate_audit_report()
-    assert result["report_version"] == "0.0.1"
-    assert "data_operations" in result
-    assert "llm_operations" in result
-    assert "cross_domain_links" in result
+    assert result["schema_version"] == AUDIT_SCHEMA_VERSION
+    assert "summary" in result
+    assert "lineage_chains" in result
+    # When storage has no runs yet, run is None and notes explains why.
+    if result.get("run") is None:
+        assert "notes" in result
 
 
 def test_audit_unsupported_template_raises() -> None:
