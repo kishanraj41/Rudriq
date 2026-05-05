@@ -112,15 +112,11 @@ def _make_mirror_callback(al_tracker):
     metadata (shape, columns, content_hash) at fire time.
     """
     from rudriq.core.schema import EdgeKind, LinkMethod, TraceEdge, TraceNode
+    from rudriq.linker import register_object_identity
 
     def _on_record(record):
         run_id = _autolineage_run_id["value"]
         if run_id is None:
-            # No SpanProcessor has wired its run_id yet. We skip
-            # mirroring rather than dump records into a default run
-            # that audit_export wouldn't find. The object_identity
-            # callback already fired separately for each output, so
-            # cross-domain linking still works.
             return
 
         try:
@@ -179,6 +175,22 @@ def _make_mirror_callback(al_tracker):
                     ),
                     run_id=run_id,
                 )
+
+            # ALSO register object identity for the record's child if we
+            # can resolve it to a live Python object via AL's _lid_to_obj
+            # weak-value dict. Many AL hooks call record() WITHOUT firing
+            # assign_id for the result (sort_values, drop_duplicates,
+            # head, reset_index, ...) — without this lookup, those
+            # outputs never enter rudriq's _object_registry and the
+            # downstream linker's identity match silently fails.
+            try:
+                lid_to_obj = getattr(al_tracker, "_lid_to_obj", None)
+                if lid_to_obj is not None:
+                    obj = lid_to_obj.get(child_id)
+                    if obj is not None:
+                        register_object_identity(obj, child_id)
+            except Exception:  # noqa: BLE001
+                pass
         except Exception as exc:  # noqa: BLE001
             _LOG.debug(
                 "RudriQ mirror callback failed for record %s: %s",
@@ -186,6 +198,95 @@ def _make_mirror_callback(al_tracker):
             )
 
     return _on_record
+
+
+def _make_assign_id_stub_callback(al_tracker):
+    """Build an assign_id callback that registers identity AND saves a
+    stub TraceNode for the assigned object.
+
+    Why this exists: AutoLineage's read_csv (and similar source hooks)
+    fire ``assign_id`` for the resulting DataFrame but never call
+    ``record()``. Without this stub, the read_csv output gets identity-
+    registered (so the linker can match it) but never appears as a
+    TraceNode in DuckDB — audit reports show 'unmirrored' placeholders
+    when the chain walks back to a read_csv.
+
+    The post_record callback's mirror later upserts with fuller info
+    (library, operation, parent_ids, duration_ms) when a record fires
+    for the same child_id. INSERT OR REPLACE in save_node makes this
+    safe — the latest write wins.
+    """
+    from rudriq.core.schema import NodeKind, TraceNode
+    from rudriq.linker import register_object_identity
+
+    def _on_assign_id(obj, lid):
+        # 1. Object identity registration — unchanged.
+        register_object_identity(obj, lid)
+
+        # 2. Save a stub TraceNode if mirroring is wired.
+        run_id = _autolineage_run_id["value"]
+        if run_id is None:
+            return
+
+        try:
+            from rudriq.storage import get_default_storage
+            storage = get_default_storage()
+
+            al_node = (al_tracker.nodes.get(lid) or {}) if al_tracker else {}
+            source = str(al_node.get("source") or "unknown")
+
+            # Heuristically classify by source string. Most read_csv-
+            # style hooks pass source like "pandas.read_csv"; fall back
+            # to UNKNOWN for unfamiliar sources. The post_record callback
+            # will overwrite with a more specific kind when it fires.
+            source_lower = source.lower()
+            if any(w in source_lower for w in ("read_", "load", "from_")):
+                kind = NodeKind.DATA_READ
+            elif any(w in source_lower for w in ("write", "to_", "save")):
+                kind = NodeKind.DATA_WRITE
+            elif source_lower in ("untracked", "unknown"):
+                # No info from AL; conservative default. Often this is
+                # actually a read_csv (the AL hook didn't pass source);
+                # mark as DATA_READ.
+                kind = NodeKind.DATA_READ
+            else:
+                kind = NodeKind.DATA_TRANSFORM
+
+            metadata: dict[str, Any] = {}
+            for key in ("shape", "columns", "filepath", "source"):
+                v = al_node.get(key)
+                if v is not None:
+                    metadata[f"autolineage.{key}"] = v
+
+            # Try to extract a clean operation name from the source.
+            # "pandas.read_csv" → operation="read_csv"; otherwise pass
+            # the raw source through.
+            if "." in source:
+                library, _, operation = source.partition(".")
+            else:
+                library = "autolineage"
+                operation = source
+
+            node = TraceNode(
+                node_id=lid,
+                kind=kind,
+                library=library or "autolineage",
+                operation=operation or "tracked",
+                started_at=datetime.now(timezone.utc),
+                ended_at=datetime.now(timezone.utc),
+                metadata=metadata,
+                content_hash=al_node.get("content_hash"),
+            )
+
+            storage.ensure_run(run_id)
+            storage.save_node(node, run_id=run_id)
+        except Exception as exc:  # noqa: BLE001
+            _LOG.debug(
+                "RudriQ assign_id stub mirror failed for lid %s: %s",
+                lid, exc,
+            )
+
+    return _on_assign_id
 
 
 def _activate_autolineage() -> bool:
@@ -215,16 +316,24 @@ def _activate_autolineage() -> bool:
                     "auto-registration callback not wired."
                 )
             elif hasattr(tracker, "register_assign_id_callback"):
-                tracker.register_assign_id_callback(register_object_identity)
+                # Combined assign_id callback: registers object identity
+                # AND saves a stub TraceNode (covers read_csv-style hooks
+                # that fire assign_id without calling record()).
+                tracker.register_assign_id_callback(
+                    _make_assign_id_stub_callback(tracker)
+                )
                 _LOG.info(
-                    "RudriQ: auto-registration callback wired into AutoLineage."
+                    "RudriQ: assign_id callback wired (object identity + "
+                    "stub TraceNode mirroring)."
                 )
 
                 # ALSO wire post-record mirroring (autolineage v0.6.0+).
                 # This persists each AutoLineage record as a TraceNode +
                 # parent->child DIRECT edges in RudriQ's DuckDB so audit
-                # reports show full upstream chains without 'external'
-                # placeholders.
+                # reports show full upstream chains. The post_record
+                # callback ALSO registers identity for the record's child
+                # via AL's _lid_to_obj (covers transforms like sort_values
+                # that record() but skip assign_id for the result).
                 if hasattr(tracker, "register_post_record_callback"):
                     tracker.register_post_record_callback(
                         _make_mirror_callback(tracker)

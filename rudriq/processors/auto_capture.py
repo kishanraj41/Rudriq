@@ -54,30 +54,51 @@ def _wrap_method_for_input_capture(original_method, input_param_name: str):
     """
     Wrap a method to record its input parameter to RudriQ's side-channel.
 
-    The wrapper:
-    1. Resolves the input value from kwargs (preferred) or positional args
-       (fallback — last positional after self, best-effort).
-    2. Reads the current OTel span's span_id from the active span context.
-    3. Calls record_llm_input(span_id_hex, input_value).
-    4. Delegates to the original method unchanged.
+    Two-channel input stashing
+    --------------------------
+    The wrapper stashes the input in TWO ways, by design:
 
-    If anything fails, the wrapper logs at DEBUG and falls through to
-    the original method. Auto-capture is best-effort and never breaks
-    the user's call.
+    1. **By span_id** when an active recording span is available. This is
+       the precise correlation channel: SpanProcessor.on_end looks up by
+       the same span_id and gets the exact input.
+    2. **On a thread-local "most recent input" slot** unconditionally.
+       This is the fallback for the common case where our wrapper runs
+       OUTSIDE an active recording span — for example when OpenLLMetry's
+       openai instrumentor uses suppression flags or its wrapt wrapping
+       layer doesn't establish a current span context at the moment our
+       (inner) wrapper executes. Empirically observed in
+       opentelemetry-instrumentation-openai 0.60+ where
+       ``trace.get_current_span()`` at the wrapper entry returns the
+       no-op NonRecordingSpan despite the instrumentor having
+       ``with tracer.start_as_current_span(...)`` immediately above.
+
+    SpanProcessor.on_end then prefers the span_id-keyed value but falls
+    back to the thread-local value when the span_id channel comes up
+    empty. Sequential LLM calls in a single thread match correctly;
+    concurrent or deeply-nested calls degrade (the thread-local is
+    last-writer-wins). For stricter correlation in those cases, the
+    user's instrumentation can register input identity manually via
+    rudriq.linker.register_object_identity.
     """
     @functools.wraps(original_method)
     def wrapped(*args, **kwargs):
         try:
             from rudriq.processors.linking import record_llm_input
+            from rudriq.processors.linking import set_recent_input_fallback
 
             input_value = kwargs.get(input_param_name)
-            # Fallback: when the user passed input positionally. args[0]
-            # is self for bound methods; the LLM input (if positional)
-            # is conventionally args[1] for create-style APIs.
             if input_value is None and len(args) > 1:
                 input_value = args[1]
 
             if input_value is not None:
+                # Always stash on the thread-local fallback slot so the
+                # SpanProcessor can find it even when there's no active
+                # span at our wrapper's runtime.
+                set_recent_input_fallback(input_value)
+
+                # ALSO stash by span_id if a recording span is active —
+                # this is the precise channel that handles concurrent or
+                # nested calls correctly when the layering cooperates.
                 current_span = trace.get_current_span()
                 if current_span is not None and current_span.is_recording():
                     span_id_int = current_span.get_span_context().span_id
@@ -212,6 +233,19 @@ def install_pandas_lid_propagation() -> bool:
             parent_id = _object_registry.get(id(self))
             if parent_id is not None:
                 register_object_identity(result, parent_id)
+                # Also register each element so list slicing preserves
+                # linkage. Without this, `texts[batch_idx:batch_idx+N]`
+                # produces a fresh list whose elements have no registry
+                # entry; the linker's element-walk strategy then fails.
+                # Cost: O(len) entries in the in-process registry, which
+                # is acceptable for typical batch sizes (10-10k). For
+                # very large lists (>=100k elements), we skip per-element
+                # registration to avoid memory pressure — the whole-list
+                # registration still works for the no-slice case.
+                if len(result) < 100_000:
+                    for elem in result:
+                        if id(elem) not in _object_registry:
+                            register_object_identity(elem, parent_id)
         except Exception as exc:  # noqa: BLE001
             _LOG.debug("tolist propagation failed: %s", exc)
         return result

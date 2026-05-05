@@ -61,19 +61,30 @@ def link_by_object_identity(
     llm_input: Any,
     span_attributes: dict[str, Any],
 ) -> tuple[str | None, str, float]:
-    """Match by Python id() against the in-process object registry."""
+    """Match by Python id() against the in-process object registry.
+
+    Strategies, in order:
+    1. The input itself is registered (confidence 1.0).
+    2. The input is a list/tuple and ANY of its elements is registered
+       (confidence 0.95). This handles the common RAG pattern where the
+       user passes ``texts[batch_idx:batch_idx + N]`` to embeddings —
+       a fresh slice list whose elements share identity with the
+       parent list. We scan elements rather than only checking the
+       first because non-zero-aligned slices (e.g., texts[50:100])
+       have a different first element than the parent list.
+    """
     try:
         candidate = _object_registry.get(id(llm_input))
         if candidate is not None:
             return candidate, LinkMethod.OBJECT_IDENTITY.value, 1.0
 
-        # If input is a list/tuple, try its first element (RAG pattern:
-        # df['text'].tolist() loses identity but elements may be tracked).
         if isinstance(llm_input, (list, tuple)) and llm_input:
-            first = llm_input[0]
-            candidate = _object_registry.get(id(first))
-            if candidate is not None:
-                return candidate, LinkMethod.OBJECT_IDENTITY.value, 0.95
+            # Cap the scan so a 1M-token input doesn't tank the linker.
+            # For typical batch-embed sizes (50-1000), this is cheap.
+            for elem in llm_input[:10_000]:
+                candidate = _object_registry.get(id(elem))
+                if candidate is not None:
+                    return candidate, LinkMethod.OBJECT_IDENTITY.value, 0.95
     except Exception as exc:  # noqa: BLE001
         _LOG.debug("object_identity match failed: %s", exc)
 

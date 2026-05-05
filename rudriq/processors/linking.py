@@ -76,6 +76,15 @@ _LOG = logging.getLogger("rudriq.processor")
 _inputs_by_span_id: dict[str, Any] = {}
 _inputs_lock = threading.Lock()
 
+# Thread-local fallback: most recent LLM input seen by the auto_capture
+# wrapper, regardless of whether an active recording span existed at
+# wrap time. Used by SpanProcessor.on_end when the span_id-keyed channel
+# misses (the common case for OpenLLMetry's openai instrumentor where
+# our inner wrapper runs without a current span context). See
+# rudriq.processors.auto_capture._wrap_method_for_input_capture for
+# the rationale.
+_recent_input = threading.local()
+
 
 def record_llm_input(span_id: str, llm_input: Any) -> None:
     """
@@ -89,6 +98,20 @@ def record_llm_input(span_id: str, llm_input: Any) -> None:
         _inputs_by_span_id[span_id] = llm_input
 
 
+def set_recent_input_fallback(llm_input: Any) -> None:
+    """Thread-local fallback: latest LLM input seen by the auto_capture
+    wrapper. Last-writer-wins per thread."""
+    _recent_input.value = llm_input
+
+
+def consume_recent_input_fallback() -> Any | None:
+    """Pop the thread-local fallback. Returns None if not set."""
+    val = getattr(_recent_input, "value", None)
+    if val is not None:
+        _recent_input.value = None
+    return val
+
+
 def _consume_llm_input(span_id: str) -> Any | None:
     with _inputs_lock:
         return _inputs_by_span_id.pop(span_id, None)
@@ -98,6 +121,7 @@ def clear_input_registry() -> None:
     """Test-only helper."""
     with _inputs_lock:
         _inputs_by_span_id.clear()
+    _recent_input.value = None
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +224,11 @@ class RudriQSpanProcessor(SpanProcessor):
         # If this is an LLM span, run the linker.
         if is_genai_span(span_name):
             llm_input = _consume_llm_input(span_id_hex) if span_id_hex else None
+            if llm_input is None:
+                # Fallback: thread-local "most recent input" — covers the
+                # case where our auto_capture wrapper ran outside an
+                # active recording span and stashed by-span-id failed.
+                llm_input = consume_recent_input_fallback()
             parent_id, method, confidence = correlate(llm_input, attrs)
 
             if parent_id is not None:
