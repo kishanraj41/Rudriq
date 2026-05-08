@@ -111,17 +111,24 @@ Currently in active 30-day sprint development. v1.0 target: November 2026.
 
 See [BACKLOG.md](BACKLOG.md) for tracked deferrals.
 
-## Run the demo
+## Run the demos
+
+Two notebooks under [`examples/`](examples/) — one toy-scale, one production-shaped.
 
 ```bash
 git clone https://github.com/kishanraj41/rudriq.git
 cd rudriq
 pip install -e ".[dev,llm,lineage]"
-pytest tests/ -v             # 78 passing
-jupyter notebook examples/rag_with_lineage.ipynb
+pytest tests/                                          # 95+ passing
+jupyter notebook examples/rag_with_lineage.ipynb       # toy: 1 read, 1 filter, 1 LLM call
+jupyter notebook examples/realistic_rag_pipeline.ipynb # realistic: 5 CSVs, ~200 ops, 43 LLM calls
 ```
 
-The notebook executes a real pandas pipeline + a (mocked-offline) OpenAI call and produces the audit report at the end. No API keys required.
+The toy demo (`rag_with_lineage.ipynb`) is the four-cell intro that walks through the mechanism. The realistic demo (`realistic_rag_pipeline.ipynb`) runs an enterprise-shaped RAG pipeline — 5 source documents through ~200 pandas operations, 3 batched embedding calls and 20 query+chat cycles — and produces a complete audit report ready for compliance review. Both run offline (mocked OpenAI HTTP layer) and need no API keys.
+
+### See it on a realistic workload
+
+For design partner outreach and to evaluate RudriQ on something closer to your own workload, see [`examples/realistic_rag_pipeline.ipynb`](examples/realistic_rag_pipeline.ipynb). It's honest about what's covered today (~7% of LLM calls link via object identity in this workload — the batch embeddings) and what's tracked for v0.0.8+ (retrieval-aware linker for the chat completions whose inputs are prompt-formatted strings; see [BACKLOG.md](BACKLOG.md)).
 
 ## License
 

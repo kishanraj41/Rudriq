@@ -6,7 +6,7 @@ from __future__ import annotations
 def test_package_imports() -> None:
     import rudriq
 
-    assert rudriq.__version__ == "0.0.7.dev0"
+    assert rudriq.__version__ == "0.0.8.dev0"
     assert hasattr(rudriq, "get_tracker")
     assert hasattr(rudriq, "diagnose")
 
