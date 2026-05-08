@@ -128,7 +128,7 @@ The toy demo (`rag_with_lineage.ipynb`) is the four-cell intro that walks throug
 
 ### See it on a realistic workload
 
-For design partner outreach and to evaluate RudriQ on something closer to your own workload, see [`examples/realistic_rag_pipeline.ipynb`](examples/realistic_rag_pipeline.ipynb). It's honest about what's covered today (~7% of LLM calls link via object identity in this workload — the batch embeddings) and what's tracked for v0.0.8+ (retrieval-aware linker for the chat completions whose inputs are prompt-formatted strings; see [BACKLOG.md](BACKLOG.md)).
+For design partner outreach and to evaluate RudriQ on something closer to your own workload, see [`examples/realistic_rag_pipeline.ipynb`](examples/realistic_rag_pipeline.ipynb). On v0.0.8 the retrieval-aware substring linker covers **23/43 LLM calls** — every batch embedding (object identity) and every chat completion (substring matching against tracked content embedded in the prompt). The 20 query embeddings remain unlinked by design: they're freshly-constructed strings with no upstream tracked source, and matching them on coincidental similarity would produce false positives that destroy the trust value of the audit report.
 
 ## License
 

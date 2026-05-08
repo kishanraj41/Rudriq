@@ -6,20 +6,6 @@ Things deferred from the sprint, tracked here so they don't get lost.
 
 ### Critical for June 1 design partner readiness
 
-#### Retrieval-aware linker (v0.0.8 / Day 11-12)
-**Status:** Open
-**Priority:** Critical — without this, demo shows ~7% LLM call linkage
-**Origin:** Day 8 realistic pipeline test
-
-Object-identity linking covers batch embeddings but not chat completions (messages dicts contain prompt-formatted strings) or query embeddings (fresh strings). The realistic RAG pipeline links 3/43 LLM calls today.
-
-Two approaches:
-
-1. **Substring-matching with provenance.** When an LLM input contains substrings of upstream-tracked strings (e.g., the chat message's `content` field includes a registered DataFrame's text rows), emit a lineage edge with confidence ~0.7. Must avoid false positives on common substrings (apply a min-length threshold or hash-window approach).
-2. **Framework-level integration with RAG libraries** (LangChain, LlamaIndex) where the framework owns the prompt assembly and can register lineage explicitly.
-
-For v1.0 this is "linker strategies pluggable + retrieval-aware default."
-
 #### LRU cap on linker registry
 **Status:** Open
 **Priority:** High — production safety
@@ -85,6 +71,30 @@ The CLI accepts `--format pdf` and prints a friendly error pointing at pandoc. R
 `generate_audit_report(template="custom-internal")` raises NotImplementedError. Real templates would let a customer supply their own Jinja2 template that maps the trace graph onto their internal compliance format. Deferred to v0.3.
 
 ## Resolved
+
+### Retrieval-aware linker (substring matching) ✅
+**Resolved:** May 7-8, 2026 (Day 10a + 10b)
+**Commits:** addf915 (algorithm + 12 unit tests + LinkMethod.SUBSTRING enum), Day 10b (notebook narrative + version bump)
+
+Object-identity linking covered batch embeddings (input list passed directly from pandas) but missed chat completions (messages dicts contain prompt-formatted strings) and query embeddings (fresh strings).
+
+**Solution:** substring-based matching with provenance metadata.
+
+- New `link_by_substring` strategy in `rudriq.linker`, confidence 0.7 (strong) or 0.5 (marginal).
+- Parallel `_content_registry` mapping `node_id` → list of strings extracted from tracked objects (handles `str`, `list[str]`, pandas `Series` of strings). First-write-wins to preserve bulk content against Day 8's per-element tolist propagation.
+- Bidirectional containment check (upstream contained in input OR input contained in upstream) with `min_match_length=20`, `min_match_fraction=0.3`. Asymmetric guard: EITHER fraction must clear threshold (lets a short doc fully contained in a long prompt match cleanly).
+- `LinkMethod` enum extended with `SUBSTRING = "substring"` (caught during integration validation: a missing enum value was raising `ValueError` in `SpanProcessor.on_end`'s `LinkMethod(method)` cast, swallowed silently by Day 8's defensive try/except — unit tests passed but no edges landed).
+- Strategy ordering: `object_identity` (1.0) → `content_hash` (0.8) → `substring` (0.7/0.5) → `name_match` (0.5).
+
+**Realistic pipeline impact:** 3/43 → 23/43 linked LLM calls (7x improvement).
+
+| LLM call type | Count | Linkage rate | Strategy |
+|---|---|---|---|
+| Batch embeddings | 3 | 3/3 (100%) | Object identity |
+| Chat completions | 20 | 20/20 (100%) | Substring (new) |
+| Query embeddings | 20 | 0/20 (0%) | Unlinked by design — fresh strings, no upstream source |
+
+12 unit tests in `tests/test_substring_linker.py`. Notebook `examples/realistic_rag_pipeline.ipynb` cell 15 updated with the principled framing. Confidence-by-design: query embeddings are unlinked because matching fresh strings would produce false positives that destroy audit-report trust value.
 
 ### Notebook variant of realistic pipeline ✅
 **Resolved:** May 9, 2026 (Day 9)
