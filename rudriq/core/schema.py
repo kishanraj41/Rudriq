@@ -58,6 +58,7 @@ class LinkMethod(str, Enum):
 
     OBJECT_IDENTITY = "object_identity"
     CONTENT_HASH = "content_hash"
+    SUBSTRING = "substring"
     NAME_MATCH = "name_match"
     UNKNOWN = "unknown"
 
