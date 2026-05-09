@@ -6,16 +6,7 @@ Things deferred from the sprint, tracked here so they don't get lost.
 
 ### Critical for June 1 design partner readiness
 
-#### LRU cap on linker registry
-**Status:** Open
-**Priority:** High — production safety
-**Origin:** Day 8 unbounded growth observation
-
-`rudriq.linker._object_registry` is a `dict[int, str]` that grows on every captured output. After Day 8's per-element tolist registration, growth is roughly 1 entry per text element passed through embeddings. After 250 ops it has ~191 entries; after a long-running production pipeline (10K+ ops with batch sizes of 1000), it grows toward memory exhaustion.
-
-**Fix candidates:** LRU cap (e.g., 50K entries, evict oldest); use `weakref` where Python type permits; expose `register_object_identity_with_ttl(...)` for callers that want explicit lifecycle. Cache must be concurrent-safe.
-
-**Day 8 partial mitigation:** the `Series.tolist` per-element registration is gated to lists with fewer than 100k elements, so a single 1M-token tolist cannot cripple the registry. But long-running pipelines still accumulate.
+_(All Critical-priority items resolved as of Day 11. Remaining work is Important/Operational.)_
 
 ### Important but deferable
 
@@ -71,6 +62,27 @@ The CLI accepts `--format pdf` and prints a friendly error pointing at pandoc. R
 `generate_audit_report(template="custom-internal")` raises NotImplementedError. Real templates would let a customer supply their own Jinja2 template that maps the trace graph onto their internal compliance format. Deferred to v0.3.
 
 ## Resolved
+
+### LRU cap on linker registries ✅
+**Resolved:** May 9, 2026 (Day 11)
+**Commit:** [hash from this push]
+
+Both `_object_registry` and `_content_registry` are now LRU-bounded. Default 50,000 entries each, configurable via `RUDRIQ_LINKER_CACHE_SIZE` env var (clamped to a minimum of 100 to prevent pathological eviction; invalid values silently fall back to default).
+
+**Implementation.** Switched both registries from `dict` to `collections.OrderedDict`. Added `_registry_lock` and `_content_registry_lock` (separate locks so substring scanning's content-side hold doesn't block rapid object-identity registrations). Eviction is FIFO via `popitem(last=False)`; access (lookup or re-register) refreshes position via `move_to_end`.
+
+**Correctness invariants preserved.**
+- First-write-wins on `_content_registry` (Day 10a) — re-registration of the same `node_id` refreshes LRU position but does NOT overwrite content. The Day 10a regression test still passes.
+- All-element scan in `link_by_object_identity` (Day 8) — preserved. Non-zero-aligned slice lookups still work.
+- `(None, "object_identity", 1.0)` on miss (Day 2 contract) — preserved.
+
+**Cross-registry consistency.** Eviction is independent per registry. If `_content_registry` evicts node X but `_object_registry` still has `id(obj) → X`, the linker can still match X via object identity (the substring path just won't trigger for X). Acceptable degradation; cross-registry coordination would need a different concurrency model.
+
+**Tests added (11 in `tests/test_linker_lru_cap.py`).** Default size, env var override / invalid / clamp. Object-registry eviction order. Refresh on re-register. Refresh on lookup. Content-registry eviction order. Refresh on substring lookup. Concurrent registration smoke test (4 threads, 200 registrations under cap=100, ends at exactly 100). Runtime cap shrinking via `_set_cache_size_for_tests`.
+
+**Bug caught during test development.** First version of two tests used `register_object_identity(object(), ...)` without holding references to the created objects. CPython reuses ids for unreferenced objects, so 50 sequential `object()` calls in a loop reused the same id, making the registry record 50 LRU refreshes instead of 50 inserts (final size: 1, not 50). Fixed by holding references in a list. Worth flagging because it's a real surprise: `object()` in a loop with no aliasing is NOT a sequence of distinct objects from the registry's perspective.
+
+**Realistic pipeline regression check.** 23/43 LLM call linkage preserved (pipeline uses ~191 registry entries, well below default 50K cap). Tests: 118 passed nemo / 120 passed .venv-full.
 
 ### Retrieval-aware linker (substring matching) ✅
 **Resolved:** May 7-8, 2026 (Day 10a + 10b)
