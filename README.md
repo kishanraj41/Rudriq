@@ -8,6 +8,7 @@
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![Status](https://img.shields.io/badge/status-pre--alpha-orange.svg)](https://github.com/kishanraj41/rudriq)
 [![Tests](https://img.shields.io/badge/tests-78%20passing-success.svg)](https://github.com/kishanraj41/rudriq)
+[![Paper](https://img.shields.io/badge/paper-SSRN-blue.svg)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=6683825)
 
 When your AI system fails — drifts, hallucinates, returns the wrong answer — the cause is usually upstream of the LLM call. RudriQ traces failures back to the data pipeline operations that caused them, and produces audit-grade evidence designed for EU AI Act compliance, litigation defense, and AI liability insurance underwriting.
 
@@ -138,4 +139,4 @@ MIT. Use it however you want. Compliance buyers: a paid Enterprise tier with air
 
 Built by [Kishan Raj VG](https://github.com/kishanraj41) at RudriQ Research, Austin, TX.
 
-Co-author of [AutoLineage](https://github.com/kishanraj41/autolineage), the data lineage substrate RudriQ builds on. JOSS reviewer.
+Author of [AutoLineage: Operation-Level Data Lineage for Python ML Pipelines via Import-Time Hooking](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=6683825) (SSRN preprint, 2026), the data lineage substrate RudriQ builds on. JOSS reviewer.
