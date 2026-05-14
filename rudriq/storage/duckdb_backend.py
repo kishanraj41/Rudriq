@@ -14,7 +14,6 @@ Schema:
 from __future__ import annotations
 
 import json
-import logging
 import os
 import threading
 from datetime import datetime, timezone
@@ -30,6 +29,7 @@ from rudriq.core.schema import (
     TraceEdge,
     TraceGraph,
     TraceNode,
+    ensure_utc,
 )
 
 
@@ -76,23 +76,6 @@ def _default_db_path() -> Path:
     home = Path(os.environ.get("RUDRIQ_HOME", Path.home() / ".rudriq"))
     home.mkdir(parents=True, exist_ok=True)
     return home / "traces.duckdb"
-
-
-_LOG = logging.getLogger("rudriq.storage")
-
-
-def _ensure_utc(dt: datetime | None) -> datetime | None:
-    """Force a datetime to be timezone-aware UTC. Naive datetimes are
-    treated as UTC and a warning is emitted — callers should pass aware."""
-    if dt is None:
-        return None
-    if dt.tzinfo is None:
-        _LOG.warning(
-            "Naive datetime received in storage layer; assuming UTC. "
-            "Callers should pass timezone-aware datetimes."
-        )
-        return dt.replace(tzinfo=timezone.utc)
-    return dt
 
 
 def _from_db(dt: datetime | None) -> datetime | None:
@@ -154,7 +137,7 @@ class DuckDBStorage:
                 "INSERT OR IGNORE INTO runs VALUES (?, ?, ?)",
                 [
                     run_id,
-                    _ensure_utc(datetime.now(timezone.utc)),
+                    datetime.now(timezone.utc),
                     json.dumps(metadata or {}),
                 ],
             )
@@ -177,7 +160,7 @@ class DuckDBStorage:
                     "INSERT OR REPLACE INTO runs VALUES (?, ?, ?)",
                     [
                         graph.run_id,
-                        _ensure_utc(graph.created_at),
+                        ensure_utc(graph.created_at, source="TraceGraph.created_at"),
                         json.dumps(graph.metadata),
                     ],
                 )
@@ -199,8 +182,8 @@ class DuckDBStorage:
                             node.kind.value,
                             node.library,
                             node.operation,
-                            _ensure_utc(node.started_at),
-                            _ensure_utc(node.ended_at),
+                            ensure_utc(node.started_at, source="TraceNode.started_at (replace_run)"),
+                            ensure_utc(node.ended_at, source="TraceNode.ended_at (replace_run)"),
                             json.dumps(node.metadata),
                             node.content_hash,
                         ],
@@ -258,8 +241,8 @@ class DuckDBStorage:
                     node.kind.value,
                     node.library,
                     node.operation,
-                    _ensure_utc(node.started_at),
-                    _ensure_utc(node.ended_at),
+                    ensure_utc(node.started_at, source="TraceNode.started_at (save_node)"),
+                    ensure_utc(node.ended_at, source="TraceNode.ended_at (save_node)"),
                     json.dumps(node.metadata),
                     node.content_hash,
                 ],

@@ -83,22 +83,17 @@ def _autolineage_record_to_started_at(record: Any) -> datetime:
     """Derive a UTC datetime from the record's timestamp string.
 
     AutoLineage's TransformationRecord.timestamp is set by
-    ``datetime.now().isoformat()`` — a NAIVE local-time string with no
-    tzinfo. Naively attaching tzinfo=UTC mislabels local-as-UTC and
-    produces timestamps 5+ hours off in non-UTC timezones. Instead,
-    interpret naive timestamps as local time (Python's
-    ``astimezone()`` semantics on a naive datetime) and convert to UTC.
+    ``datetime.now().isoformat()`` — a NAIVE local-time string. Day 7's
+    bug was labeling it as UTC via ``.replace(tzinfo=timezone.utc)``,
+    producing 5-hour errors on non-UTC systems. The canonical conversion
+    lives in rudriq.core.schema.autolineage_timestamp_to_utc.
     """
+    from rudriq.core.schema import autolineage_timestamp_to_utc
+
     ts = getattr(record, "timestamp", None)
     if ts:
         try:
-            parsed = datetime.fromisoformat(ts)
-            if parsed.tzinfo is None:
-                # Interpret as local; convert to UTC.
-                parsed = parsed.astimezone(timezone.utc)
-            else:
-                parsed = parsed.astimezone(timezone.utc)
-            return parsed
+            return autolineage_timestamp_to_utc(datetime.fromisoformat(ts))
         except (ValueError, TypeError):
             pass
     return datetime.now(timezone.utc)

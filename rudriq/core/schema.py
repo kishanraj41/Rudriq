@@ -15,6 +15,38 @@ existing observability stack), but our internal model is richer:
 The trade is: more engineering complexity now, real defensibility later.
 Pure OTel-based competitors are constrained by what OTel can express;
 we are not.
+
+Timezone discipline
+-------------------
+Every datetime in this schema is timezone-aware UTC. The conventions
+RudriQ enforces at every boundary:
+
+1. Internal datetimes: always datetime.now(timezone.utc). Never
+   datetime.now() or datetime.utcnow() (both produce naive
+   datetimes; the latter is deprecated in Python 3.12+).
+
+2. OTel span timestamps: nanoseconds since UNIX epoch as int. Convert
+   to aware UTC via otel_nanos_to_utc(). See rudriq/adapters/otel_ingest.py.
+
+3. AutoLineage record timestamps: NAIVE LOCAL TIME (as of autolineage
+   v0.6.1, TransformationRecord.timestamp is set by
+   datetime.now().isoformat()). Convert via autolineage_timestamp_to_utc(),
+   which interprets the naive value as local time and converts to UTC
+   via .astimezone(). NEVER use .replace(tzinfo=timezone.utc), which
+   would claim the value already IS UTC and silently corrupt it (this
+   was Day 7's bug).
+
+4. External datetime in metadata dicts: validate via ensure_utc()
+   before persisting. Reject naive datetimes loudly via
+   TimezoneViolationError rather than silently coercing.
+
+5. Database roundtrip: schema uses TIMESTAMPTZ (DuckDB stores as
+   UTC, returns aware Python datetimes). storage._from_db() asserts
+   tzinfo is set on every read.
+
+If you find yourself adding a timestamp-handling code path, this
+list documents the only correct conversion for each source type.
+Adding a sixth source type? Add it here AND add a test.
 """
 
 from __future__ import annotations
@@ -24,7 +56,76 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import Any, Optional
+
+
+class TimezoneViolationError(ValueError):
+    """Raised when a naive datetime is passed where aware UTC is required.
+
+    See the module docstring for RudriQ's timezone conventions. The
+    canonical conversion helpers below (ensure_utc,
+    autolineage_timestamp_to_utc, otel_nanos_to_utc) handle each source
+    correctly; this exception fires when ad-hoc code routes a naive
+    datetime to a write boundary without going through them.
+    """
+
+
+def ensure_utc(dt: Optional[datetime], *, source: str = "unknown") -> Optional[datetime]:
+    """Enforce timezone-aware UTC at write boundaries.
+
+    Args:
+        dt: A datetime, or None.
+        source: Human-readable description of where this datetime came
+            from. Surfaced in error messages so debugging a regression
+            doesn't require reading a stack trace.
+
+    Returns:
+        None if dt is None; otherwise a timezone-aware UTC datetime
+        (converted from any other timezone if needed).
+
+    Raises:
+        TimezoneViolationError: if dt is naive (tzinfo is None). The
+            caller must use one of the source-specific helpers (e.g.
+            autolineage_timestamp_to_utc) at the ingestion point.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        raise TimezoneViolationError(
+            f"Naive datetime from {source}: {dt!r}. "
+            f"All RudriQ datetimes must be timezone-aware. "
+            f"See rudriq.core.schema module docstring for conventions."
+        )
+    return dt.astimezone(timezone.utc)
+
+
+def autolineage_timestamp_to_utc(naive_local: datetime) -> datetime:
+    """Convert AutoLineage's naive local-time timestamp to aware UTC.
+
+    AutoLineage emits naive datetimes via datetime.now().isoformat(),
+    which represent local wall-clock time. We interpret them as local
+    (which is what .astimezone() does for naive inputs: treats them as
+    if they were in the system's local zone) and convert to UTC.
+
+    This is the canonical conversion for the AutoLineage boundary. Use
+    this instead of dt.replace(tzinfo=timezone.utc), which was Day 7's
+    bug pattern (it claims naive-local IS UTC, producing 5-hour errors
+    on non-UTC systems).
+
+    If somehow an aware datetime arrives (future AutoLineage version),
+    it is normalized to UTC.
+    """
+    return naive_local.astimezone(timezone.utc)
+
+
+def otel_nanos_to_utc(nanos: int) -> datetime:
+    """Convert OTel's nanosecond UNIX timestamp to aware UTC datetime.
+
+    OpenTelemetry spans carry start_time and end_time as integer
+    nanoseconds since the UNIX epoch in UTC. Python's fromtimestamp
+    handles the conversion; we just pin the tz so the result is aware.
+    """
+    return datetime.fromtimestamp(nanos / 1_000_000_000, tz=timezone.utc)
 
 
 class NodeKind(str, Enum):

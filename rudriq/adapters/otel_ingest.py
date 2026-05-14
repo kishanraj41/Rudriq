@@ -12,10 +12,10 @@ Reference: https://opentelemetry.io/docs/specs/semconv/gen-ai/
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
-from rudriq.core.schema import NodeKind, TraceNode
+from rudriq.core.schema import NodeKind, TraceNode, otel_nanos_to_utc
 
 
 # ---------------------------------------------------------------------------
@@ -65,8 +65,12 @@ def classify_span_kind(span_name: str, attributes: dict[str, Any]) -> NodeKind:
 
 
 def _ns_to_datetime(timestamp_ns: int) -> datetime:
-    """OTel spans use nanoseconds-since-epoch; convert to UTC datetime."""
-    return datetime.fromtimestamp(timestamp_ns / 1e9, tz=timezone.utc)
+    """OTel spans use nanoseconds-since-epoch; convert to UTC datetime.
+
+    Thin wrapper around the canonical helper in rudriq.core.schema so the
+    timezone boundary at OTel ingestion is documented in one place.
+    """
+    return otel_nanos_to_utc(timestamp_ns)
 
 
 def _extract_library(span_name: str, attributes: dict[str, Any]) -> str:
