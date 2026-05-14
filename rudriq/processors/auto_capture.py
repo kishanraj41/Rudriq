@@ -61,44 +61,61 @@ def _wrap_method_for_input_capture(original_method, input_param_name: str):
     1. **By span_id** when an active recording span is available. This is
        the precise correlation channel: SpanProcessor.on_end looks up by
        the same span_id and gets the exact input.
-    2. **On a thread-local "most recent input" slot** unconditionally.
-       This is the fallback for the common case where our wrapper runs
-       OUTSIDE an active recording span — for example when OpenLLMetry's
-       openai instrumentor uses suppression flags or its wrapt wrapping
-       layer doesn't establish a current span context at the moment our
-       (inner) wrapper executes. Empirically observed in
-       opentelemetry-instrumentation-openai 0.60+ where
-       ``trace.get_current_span()`` at the wrapper entry returns the
-       no-op NonRecordingSpan despite the instrumentor having
+    2. **On the OTel context** unconditionally. This is the fallback for
+       the common case where our wrapper runs OUTSIDE an active recording
+       span — for example when OpenLLMetry's openai instrumentor uses
+       suppression flags or its wrapt wrapping layer doesn't establish a
+       current span context at the moment our (inner) wrapper executes.
+       Empirically observed in opentelemetry-instrumentation-openai 0.60+
+       where ``trace.get_current_span()`` at the wrapper entry returns
+       the no-op NonRecordingSpan despite the instrumentor having
        ``with tracer.start_as_current_span(...)`` immediately above.
 
-    SpanProcessor.on_end then prefers the span_id-keyed value but falls
-    back to the thread-local value when the span_id channel comes up
-    empty. Sequential LLM calls in a single thread match correctly;
-    concurrent or deeply-nested calls degrade (the thread-local is
-    last-writer-wins). For stricter correlation in those cases, the
-    user's instrumentation can register input identity manually via
-    rudriq.linker.register_object_identity.
+    Day 12 Phase C: context-keyed (replaces Day 8's thread-local)
+    ------------------------------------------------------------
+    Switched to OTel's ``context`` module, which is built on Python's
+    ``contextvars``. ContextVars propagate correctly across threads,
+    across asyncio tasks, and across OTel's own automatic span-context
+    propagation. Each concurrent LLM call sees its own input, even with
+    many calls in flight simultaneously. The thread-local was
+    last-writer-wins per thread; the context-keyed approach is
+    per-context.
+
+    Lifecycle, important caveat
+    ---------------------------
+    The wrapper does NOT detach the context token after the call.
+    Reason: ``on_end`` fires AFTER our wrapper returns (during
+    Traceloop's ``__exit__`` of its ``start_as_current_span``), so
+    detaching here makes the value disappear before ``on_end`` can
+    retrieve it. Instead, each subsequent call's ``attach`` creates a
+    new context layer; ``retrieve_input_from_context`` always returns
+    the latest. Memory grows linearly with the number of LLM calls
+    per context (~one small dict per call); bounded in practice and
+    cleared when the asyncio task or thread exits. Tests that need
+    strict lifecycle can call ``detach_input_from_context`` directly.
     """
     @functools.wraps(original_method)
     def wrapped(*args, **kwargs):
         try:
-            from rudriq.processors.linking import record_llm_input
-            from rudriq.processors.linking import set_recent_input_fallback
+            from rudriq.processors.linking import (
+                record_llm_input,
+                stash_input_on_context,
+            )
 
             input_value = kwargs.get(input_param_name)
             if input_value is None and len(args) > 1:
                 input_value = args[1]
 
             if input_value is not None:
-                # Always stash on the thread-local fallback slot so the
-                # SpanProcessor can find it even when there's no active
-                # span at our wrapper's runtime.
-                set_recent_input_fallback(input_value)
+                # Primary fallback: attach the input on the OTel context
+                # so on_end can read it back regardless of whether a
+                # recording span is active here. We do NOT detach (see
+                # docstring above — on_end fires after our wrapper
+                # returns, so detaching would clear the value too early).
+                stash_input_on_context(input_value)
 
-                # ALSO stash by span_id if a recording span is active —
-                # this is the precise channel that handles concurrent or
-                # nested calls correctly when the layering cooperates.
+                # Precise channel: ALSO stash by span_id when an active
+                # recording span exists. Handles cooperating layering.
                 current_span = trace.get_current_span()
                 if current_span is not None and current_span.is_recording():
                     span_id_int = current_span.get_span_context().span_id

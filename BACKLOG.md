@@ -11,18 +11,22 @@ _(All Critical-priority items resolved as of Day 11. Remaining work is Important
 ### Important but deferable
 
 #### Concurrency-safe input stash
-**Status:** Open
+**Status:** Resolved (Day 12 Phase C, v0.0.9.dev1)
 **Origin:** Day 8 thread-local fallback
 
-`rudriq.processors.linking.set_recent_input_fallback` closes the OpenLLMetry span-context gap. It's a thread-local "most recent input" — last-writer-wins per thread. Sequential calls correlate correctly. Concurrent or deeply-nested LLM calls degrade (one thread's input can mask another's; nested calls overwrite the outer's stash before its span ends).
+Day 8's `set_recent_input_fallback` was a thread-local "most recent input" — last-writer-wins per thread. Concurrent / deeply-nested LLM calls could mask each other.
 
-**Fix candidates:** OTel context-keyed input (uses context propagation correctly across async boundaries); per-thread LIFO stack (handles nested but still racy under concurrency).
+**Resolution:** replaced with `stash_input_on_context` / `retrieve_input_from_context` in `rudriq.processors.linking`, built on `opentelemetry.context` (Python `contextvars`). Each thread / asyncio task / OTel context sees its own value. The wrapper attaches without detaching (on_end fires after Traceloop's outer span-context detach, so a wrapper-side detach clears the value too early); LRU bounds the by-span-id channel.
+
+Discovered while fixing: openllmetry-openai's *embeddings* wrapper detaches the OTel context before `span.end` fires, so the context fallback returns None for embedding spans. The by-span-id channel was switched from pop to peek+bounded LRU to compensate, which also fixed a previously-undiagnosed bug where two registered `RudriQSpanProcessor` instances raced on the single-use channel and only one of them got linked edges.
+
+6 concurrency tests in `tests/test_concurrency_input_stash.py` (threads + asyncio tasks).
 
 #### Timezone discipline audit
-**Status:** Open
+**Status:** Resolved (Day 12 Phase B, v0.0.9.dev1)
 **Origin:** Day 7 timezone bug
 
-Two timezone bugs caught so far (Day 2 DuckDB roundtrip, Day 7 AutoLineage timestamp interpretation). A comprehensive review of every place we accept a timestamp from an external source: AutoLineage `TransformationRecord.timestamp` (naive local), OTel `start_time`/`end_time` (nanoseconds since epoch UTC), OpenAI response timestamps (Unix seconds). Every ingestion path should explicitly state and enforce its timezone convention.
+Two timezone bugs caught (Day 2 DuckDB roundtrip, Day 7 AutoLineage timestamp). Phase B added `ensure_utc(dt, source=...)`, `autolineage_timestamp_to_utc`, and `otel_nanos_to_utc` in `rudriq.core.schema` and routed every ingestion path through them (DuckDB save/load, AutoLineage records, OTel nanos). 12 tests in `tests/test_timezone_discipline.py`.
 
 #### Lineage edge through Traceloop openai instrumentor (object_identity test)
 **Status:** Open / informational
@@ -62,6 +66,22 @@ The CLI accepts `--format pdf` and prints a friendly error pointing at pandoc. R
 `generate_audit_report(template="custom-internal")` raises NotImplementedError. Real templates would let a customer supply their own Jinja2 template that maps the trace graph onto their internal compliance format. Deferred to v0.3.
 
 ## Resolved
+
+### Day 12 Phase C — Concurrency-safe input stash + peek-LRU by-span-id channel ✅
+**Resolved:** May 9, 2026 (Day 12 Phase C, v0.0.9.dev1)
+
+Replaced Day 8's thread-local fallback with `opentelemetry.context`-based stash (`stash_input_on_context` / `retrieve_input_from_context` / `detach_input_from_context`). Each thread / asyncio task / OTel context sees its own value via Python's `contextvars`.
+
+**Wrapper does not detach.** OTel's `start_as_current_span` detaches its context layer BEFORE `span.end()` fires `on_end`. The auto_capture wrapper's `attach` is layered on top of Traceloop's span context, so a wrapper-side detach would unwind both. Without detach, subsequent calls stack new layers; LRU on the by-span-id channel bounds memory.
+
+**By-span-id channel switched from pop to peek + bounded LRU (max 1000).** A second issue surfaced: openllmetry-openai's *embeddings* wrapper detaches the OTel context before `span.end` fires, so the context fallback is empty at on_end time for embedding spans (still works for chat spans). With pop semantics, two registered `RudriQSpanProcessor` instances raced — only the first to fire got the input. Peek lets all processors read the same value; LRU naturally evicts stale entries.
+
+6 concurrency tests (`tests/test_concurrency_input_stash.py` — basic stash/retrieve, LIFO discipline, 4-thread isolation via barrier, 4-task asyncio isolation via gather). Realistic pipeline still produces 23/43 linkage (3 batch embeddings via object_identity, 20 chats via substring). 137 total tests passing.
+
+### Day 12 Phase B — Timezone discipline audit ✅
+**Resolved:** May 9, 2026 (Day 12 Phase B, v0.0.9.dev1)
+
+Centralized timezone conversion in `rudriq.core.schema`: `ensure_utc(dt, source=...)`, `autolineage_timestamp_to_utc`, `otel_nanos_to_utc`, plus a `TimezoneViolationError`. Every ingestion path (DuckDB save/load, AutoLineage records, OTel nanos) now routes through these helpers with explicit source labels for debugging. 12 tests in `tests/test_timezone_discipline.py`.
 
 ### LRU cap on linker registries ✅
 **Resolved:** May 9, 2026 (Day 11)

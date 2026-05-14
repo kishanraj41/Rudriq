@@ -32,8 +32,10 @@ from __future__ import annotations
 import logging
 import threading
 import uuid
+from collections import OrderedDict
 from typing import Any
 
+from opentelemetry import context as otel_context
 from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor
 
 from rudriq.adapters import otel_span_to_node
@@ -73,17 +75,86 @@ _LOG = logging.getLogger("rudriq.processor")
 # record_llm_input transparently from inside the OpenAI SDK call site.
 # Until then, the demo notebook shows the manual pattern.
 
-_inputs_by_span_id: dict[str, Any] = {}
+# Peek semantics with bounded LRU (Day 12 Phase C polish)
+# ------------------------------------------------------
+# Originally _consume_llm_input popped. That broke when the user wires
+# MULTIPLE RudriQSpanProcessors against the same TracerProvider — e.g.,
+# rudriq.auto adds one at import time AND user code adds a second to
+# scope a run_id. The first processor's pop emptied the channel before
+# the second could read it, so only one run got linked edges.
+#
+# Empirically also needed because Traceloop's openllmetry-openai
+# *embeddings* wrapper detaches the OTel context before span.end()
+# fires on_end, so the context-keyed fallback (below) returns None for
+# embedding spans (it still works for chat spans). With pop semantics
+# AND ctx-MISS, the second processor saw nothing.
+#
+# Switching to peek + bounded LRU lets every processor see the same
+# input; old entries evict naturally as new spans flow in, so memory
+# stays bounded even for long-running processes that never explicitly
+# clear the channel.
+_INPUT_REGISTRY_MAX = 1000
+_inputs_by_span_id: "OrderedDict[str, Any]" = OrderedDict()
 _inputs_lock = threading.Lock()
 
-# Thread-local fallback: most recent LLM input seen by the auto_capture
-# wrapper, regardless of whether an active recording span existed at
-# wrap time. Used by SpanProcessor.on_end when the span_id-keyed channel
-# misses (the common case for OpenLLMetry's openai instrumentor where
-# our inner wrapper runs without a current span context). See
-# rudriq.processors.auto_capture._wrap_method_for_input_capture for
-# the rationale.
-_recent_input = threading.local()
+
+# ---------------------------------------------------------------------------
+# OTel context-keyed input fallback (Day 12 Phase C)
+# ---------------------------------------------------------------------------
+#
+# Replaces the Day 8 thread-local "most recent input" fallback. The
+# thread-local worked single-threaded but degraded under concurrency:
+# one thread's input could mask another's, and nested LLM calls
+# overwrote each other before on_end fired.
+#
+# The new mechanism uses OTel's context module, which is implemented
+# on top of Python's ``contextvars.ContextVar``. ContextVars propagate
+# correctly across:
+#   * threads (each thread has an independent copy of the context)
+#   * asyncio tasks (each task inherits but writes its own copy)
+#   * OTel's automatic span-context propagation
+#
+# Lifecycle (subtle): the auto_capture wrapper attaches the input on
+# the OTel context before calling the SDK method. It does NOT detach
+# after the call returns — see the auto_capture docstring for why
+# (on_end fires AFTER Traceloop's outer span context detach, so a
+# wrapper-side detach would clear the value before on_end can read it).
+# Subsequent calls' attach stacks new layers on top; old ones are
+# bounded by the LRU on the by-span-id channel and by natural unwinding
+# when the asyncio task / thread exits.
+#
+# Note: this fallback works for chat spans (ctx is still visible at
+# on_end) but NOT for openllmetry-openai embedding spans (their wrapper
+# detaches the context before span.end). The peek-based by-span-id
+# channel above is what carries embeddings through.
+_LLM_INPUT_CONTEXT_KEY = otel_context.create_key("rudriq.llm_input")
+
+
+def stash_input_on_context(raw_input: Any):
+    """Attach an LLM input to the current OTel context.
+
+    Returns a token that MUST be passed to ``detach_input_from_context``
+    when the LLM call completes. Concurrency-safe via Python's
+    contextvars: each thread / asyncio task / OTel context sees its
+    own value, even with many concurrent calls in flight.
+    """
+    return otel_context.attach(
+        otel_context.set_value(_LLM_INPUT_CONTEXT_KEY, raw_input)
+    )
+
+
+def retrieve_input_from_context() -> Any | None:
+    """Read the LLM input from the current OTel context, or None if absent.
+
+    Non-destructive: multiple reads in the same context return the same
+    value. The wrapper-managed detach is what eventually clears it.
+    """
+    return otel_context.get_value(_LLM_INPUT_CONTEXT_KEY)
+
+
+def detach_input_from_context(token) -> None:
+    """Restore the OTel context to its state before ``stash_input_on_context``."""
+    otel_context.detach(token)
 
 
 def record_llm_input(span_id: str, llm_input: Any) -> None:
@@ -93,35 +164,38 @@ def record_llm_input(span_id: str, llm_input: Any) -> None:
     Called by user-side instrumentation (or by future RudriQ auto-hooks)
     immediately before invoking the LLM SDK. Idempotent and best-effort:
     if span_id is already registered, the new value overwrites the old.
+
+    LRU-bounded: when the registry exceeds ``_INPUT_REGISTRY_MAX`` entries,
+    the oldest entry is evicted. New writes refresh LRU position.
     """
     with _inputs_lock:
+        if span_id in _inputs_by_span_id:
+            _inputs_by_span_id.move_to_end(span_id)
         _inputs_by_span_id[span_id] = llm_input
-
-
-def set_recent_input_fallback(llm_input: Any) -> None:
-    """Thread-local fallback: latest LLM input seen by the auto_capture
-    wrapper. Last-writer-wins per thread."""
-    _recent_input.value = llm_input
-
-
-def consume_recent_input_fallback() -> Any | None:
-    """Pop the thread-local fallback. Returns None if not set."""
-    val = getattr(_recent_input, "value", None)
-    if val is not None:
-        _recent_input.value = None
-    return val
+        while len(_inputs_by_span_id) > _INPUT_REGISTRY_MAX:
+            _inputs_by_span_id.popitem(last=False)
 
 
 def _consume_llm_input(span_id: str) -> Any | None:
+    """Peek (non-destructive) the input stashed for ``span_id``.
+
+    Despite the name, this does NOT pop — see the registry comment above
+    for why peek semantics are required (multiple SpanProcessors). The
+    entry remains until LRU-evicted by subsequent inserts.
+    """
     with _inputs_lock:
-        return _inputs_by_span_id.pop(span_id, None)
+        value = _inputs_by_span_id.get(span_id)
+        if value is not None:
+            _inputs_by_span_id.move_to_end(span_id)
+        return value
 
 
 def clear_input_registry() -> None:
-    """Test-only helper."""
+    """Test-only helper: clears the by-span_id channel. The OTel
+    context-keyed fallback is per-context, so each test naturally
+    starts fresh — no explicit clearing needed."""
     with _inputs_lock:
         _inputs_by_span_id.clear()
-    _recent_input.value = None
 
 
 # ---------------------------------------------------------------------------
@@ -225,10 +299,13 @@ class RudriQSpanProcessor(SpanProcessor):
         if is_genai_span(span_name):
             llm_input = _consume_llm_input(span_id_hex) if span_id_hex else None
             if llm_input is None:
-                # Fallback: thread-local "most recent input" — covers the
-                # case where our auto_capture wrapper ran outside an
-                # active recording span and stashed by-span-id failed.
-                llm_input = consume_recent_input_fallback()
+                # Fallback: OTel context-keyed input (Day 12 Phase C).
+                # The auto_capture wrapper attached the input to the
+                # current context before calling the SDK method; we
+                # read it back here. Concurrency-safe because
+                # contextvars give each thread / asyncio task its own
+                # value.
+                llm_input = retrieve_input_from_context()
             parent_id, method, confidence = correlate(llm_input, attrs)
 
             if parent_id is not None:
