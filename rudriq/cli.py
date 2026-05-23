@@ -19,11 +19,74 @@ from rudriq.export.audit import export_audit_json, export_audit_markdown
 
 
 def _cmd_diagnose(args: argparse.Namespace) -> int:
+    # When --run-id is given, take the Day 17 Thread C deviation-weighted
+    # RCA path. When it isn't, fall back to the legacy v0.0.1 structural
+    # diagnose() stub so the original CLI contract still works for
+    # callers who haven't migrated.
+    if getattr(args, "run_id", None):
+        return _cmd_diagnose_rca(args)
     result = diagnose(
         target_metric=args.target,
         baseline_path=args.baseline,
     )
     print(json.dumps(result, indent=2, default=str))
+    return 0
+
+
+def _cmd_diagnose_rca(args: argparse.Namespace) -> int:
+    """Deviation-weighted root-cause analysis on a stored run.
+
+    Honest framing: ranks SUSPECTS by deviation, not a causal proof.
+    The CLI output and JSON shape both surface that distinction so the
+    operator doesn't accidentally over-trust the ranking.
+    """
+    from rudriq.analyzer.deviation_rca import DeviationRCA
+    from rudriq.storage import get_default_storage
+
+    storage = get_default_storage()
+    graph = storage.load_run(args.run_id)
+    if graph is None:
+        print(f"error: no run found with id {args.run_id}", file=sys.stderr)
+        return 1
+
+    if not args.target:
+        print(
+            "error: --target NODE_ID is required when --run-id is given.",
+            file=sys.stderr,
+        )
+        return 2
+
+    baseline = None
+    if getattr(args, "baseline_run_id", None):
+        baseline = storage.load_run(args.baseline_run_id)
+        if baseline is None:
+            print(
+                f"warning: baseline run {args.baseline_run_id} not found; "
+                f"structural deviation will not be scored.",
+                file=sys.stderr,
+            )
+
+    top = getattr(args, "top", 5) or 5
+    candidates = DeviationRCA(baseline_graph=baseline).analyze(graph, args.target)[:top]
+
+    if args.format == "json":
+        print(json.dumps(
+            [c.to_dict() for c in candidates],
+            indent=2, sort_keys=True, default=str,
+        ))
+        return 0
+
+    if not candidates:
+        print(f"No upstream operations found for {args.target}.")
+        return 0
+    print(f"Top {len(candidates)} root-cause suspects for {args.target}:")
+    print("(Heuristic ranking by deviation — NOT a causal proof.)\n")
+    for i, c in enumerate(candidates, 1):
+        print(f"{i}. {c.library}.{c.operation}  (node {c.node_id})")
+        print(f"   score {c.score:.3f}  | {c.chain_distance} hop(s) upstream")
+        for k, v in sorted(c.evidence.items()):
+            print(f"     - {k}: {v}")
+        print()
     return 0
 
 
@@ -174,9 +237,47 @@ def main(argv: list[str] | None = None) -> int:
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    p_diag = sub.add_parser("diagnose", help="Cross-domain root-cause analysis")
-    p_diag.add_argument("--target", help="Target metric whose change to investigate")
-    p_diag.add_argument("--baseline", help="Path to baseline fingerprint for comparison")
+    p_diag = sub.add_parser(
+        "diagnose",
+        help=(
+            "Cross-domain root-cause analysis. With --run-id + --target NODE, "
+            "ranks upstream operations by deviation (Day 17 Thread C). "
+            "Without --run-id, returns the legacy structural-summary stub."
+        ),
+    )
+    # Legacy stub args (kept for backward compatibility with v0.0.1 callers).
+    p_diag.add_argument(
+        "--target",
+        help=(
+            "When --run-id is given: the target node_id to diagnose (a "
+            "failing LLM call). Without --run-id: legacy 'target metric' "
+            "for the v0.0.1 structural-summary stub."
+        ),
+    )
+    p_diag.add_argument(
+        "--baseline",
+        help="Legacy: path to baseline fingerprint (v0.0.1 stub).",
+    )
+    # New deviation-weighted RCA args (Day 17 Thread C).
+    p_diag.add_argument(
+        "--run-id", default=None,
+        help="Run ID containing the target node (enables deviation-weighted RCA).",
+    )
+    p_diag.add_argument(
+        "--baseline-run-id", default=None,
+        help=(
+            "Baseline run for structural-deviation scoring. Without it, "
+            "ranking falls back to proximity-weighted link confidence."
+        ),
+    )
+    p_diag.add_argument(
+        "--top", type=int, default=5,
+        help="Cap on the number of suspects to return (default: 5).",
+    )
+    p_diag.add_argument(
+        "--format", choices=["text", "json"], default="text",
+        help="Output format for the new RCA path (default: text).",
+    )
     p_diag.set_defaults(func=_cmd_diagnose)
 
     p_audit = sub.add_parser("audit", help="Generate audit report from unified trace")
