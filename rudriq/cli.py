@@ -59,6 +59,7 @@ def _cmd_audit(args: argparse.Namespace) -> int:
 _EVALUATOR_REGISTRY = {
     "retrieval_relevance": "rudriq.evaluate.retrieval_relevance:RetrievalRelevanceEvaluator",
     "groundedness": "rudriq.evaluate.groundedness:GroundednessEvaluator",
+    "coherence": "rudriq.evaluate.coherence:CoherenceEvaluator",
 }
 
 

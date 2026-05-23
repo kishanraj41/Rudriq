@@ -10,10 +10,17 @@ _(All Critical-priority items resolved as of Day 11. Remaining work is Important
 
 ### Important but deferable
 
-#### Evaluation engine — three more evaluators
-**Status:** Open (deferred from Day 13)
+#### Evaluation engine — drift + consistency evaluators
+**Status:** Open — design discussion pending (Day 15 Phase 2)
 
-Day 13 shipped framework + 2 of the planned 5 evaluators; Day 14 added content-preview enrichment so they produce real scores. Remaining for Day 15: drift (response distribution change over time), consistency (same prompt → same answer across runs), coherence (response internal logical structure). Framework is designed so adding these is mechanical: implement a class with `metric` + `evaluate(graph) → list[EvalResult]`, register it in `_EVALUATOR_REGISTRY` in `rudriq/cli.py`.
+Day 13 shipped the framework + retrieval_relevance + groundedness. Day 14 added content-preview enrichment so they produce real scores. Day 15 Phase 1 added **coherence** (3rd evaluator).
+
+Drift and consistency are still open because each needs a conceptual decision about the comparison data, not just a class:
+
+* **Consistency** — "same prompt → same response across runs?" Single-run traces have no replay. Needs either (a) a multi-run query layer (cluster spans by prompt hash across stored runs in DuckDB, score response similarity), or (b) explicit replay support where the user re-runs a query and we correlate.
+* **Drift** — "is response distribution changing over time?" Needs a baseline definition. Options: (a) operator-supplied baseline run_id pinned at "this is normal"; (b) rolling window of the last N runs as auto-baseline; (c) per-prompt drift (compare today's response for a given prompt to its earlier version).
+
+Coherence was implementable in one session because it's a single-trace, single-call metric — the comparison data is already in the same node. Drift and consistency are cross-run metrics; the framework's `evaluate(graph) → list[EvalResult]` signature assumes a single graph. Either we widen the interface or we read additional runs from storage inside the evaluator.
 
 #### Concurrency-safe input stash
 **Status:** Resolved (Day 12 Phase C, v0.0.9.dev1)
