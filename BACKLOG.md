@@ -10,6 +10,24 @@ _(All Critical-priority items resolved as of Day 11. Remaining work is Important
 
 ### Important but deferable
 
+#### Evaluation engine — content-preview enrichment for evaluators
+**Status:** Open (surfaced Day 13)
+**Origin:** Day 13 validation against `examples/realistic_rag_pipeline.py`
+
+The Day 13 eval framework + 2 evaluators (`retrieval_relevance`, `groundedness`) are in. Validation against the realistic pipeline produced SKIPPED for every LLM node: the metadata RudriQ persists for spans and AL records carries identity/usage/timing/links but **no text content**.
+
+Exact gap inventory from the validation run:
+
+* LLM nodes (`llm_chat`, `llm_embedding`) carry `gen_ai.operation.name`, `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.usage.*`, and our `rudriq.lineage_parent / link_method / link_confidence / domain` — but NOT `gen_ai.prompt` or `gen_ai.completion`. openllmetry-openai gates prompt/completion capture behind opt-in env (e.g., `TRACELOOP_TRACE_CONTENT=true` / OTel's `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true`). Worth wiring this into our `[llm]` extra docs and the realistic pipeline.
+* Data nodes (`data_read`, `data_transform`) carry `autolineage.shape / columns / content_hash / source / duration_ms` — but NOT a content preview. AutoLineage's record model doesn't include sample rows. Likely fix: have rudriq's mirror callback capture a small preview (e.g., first N strings of the relevant column) at record time and persist as `autolineage.preview` in node metadata.
+
+Both fixes are mechanical and unlock the existing evaluators end-to-end. Evaluators already produce SKIPPED (not ERROR) when these are missing — they're the right correctness behavior; the gap is upstream metadata enrichment.
+
+#### Evaluation engine — three more evaluators
+**Status:** Open (deferred from Day 13)
+
+Day 13 shipped framework + 2 of the planned 5 evaluators. Remaining for Day 14: drift (response distribution change over time), consistency (same prompt → same answer across runs), coherence (response internal logical structure). Framework is designed so adding these is mechanical: implement a class with `metric` + `evaluate(graph) → list[EvalResult]`, register it in `_EVALUATOR_REGISTRY` in `rudriq/cli.py`.
+
 #### Concurrency-safe input stash
 **Status:** Resolved (Day 12 Phase C, v0.0.9.dev1)
 **Origin:** Day 8 thread-local fallback

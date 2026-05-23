@@ -3,6 +3,7 @@ RudriQ command-line interface.
 
     rudriq diagnose [--target METRIC] [--baseline PATH]
     rudriq audit    --run-id ID [--format FORMAT] [--output FILE]
+    rudriq evaluate --run-id ID [--metrics LIST] [--format FORMAT]
     rudriq version
 """
 
@@ -55,6 +56,53 @@ def _cmd_audit(args: argparse.Namespace) -> int:
     return 0
 
 
+_EVALUATOR_REGISTRY = {
+    "retrieval_relevance": "rudriq.evaluate.retrieval_relevance:RetrievalRelevanceEvaluator",
+    "groundedness": "rudriq.evaluate.groundedness:GroundednessEvaluator",
+}
+
+
+def _cmd_evaluate(args: argparse.Namespace) -> int:
+    from rudriq.evaluate.base import run_evaluators
+    from rudriq.storage import get_default_storage
+
+    requested = [m.strip() for m in args.metrics.split(",") if m.strip()]
+    unknown = [m for m in requested if m not in _EVALUATOR_REGISTRY]
+    if unknown:
+        print(
+            f"error: unknown metric(s): {', '.join(unknown)}. "
+            f"Available: {', '.join(_EVALUATOR_REGISTRY)}",
+            file=sys.stderr,
+        )
+        return 2
+
+    evaluators = []
+    for m in requested:
+        module_path, _, cls_name = _EVALUATOR_REGISTRY[m].partition(":")
+        import importlib
+        module = importlib.import_module(module_path)
+        evaluators.append(getattr(module, cls_name)())
+
+    graph = get_default_storage().load_run(args.run_id)
+    if graph is None:
+        print(f"error: no run found with id {args.run_id}", file=sys.stderr)
+        return 1
+
+    results = run_evaluators(graph, evaluators)
+
+    if args.format == "json":
+        print(json.dumps([r.to_dict() for r in results], indent=2, default=str))
+    else:
+        for r in results:
+            score_str = f"{r.score:.2f}" if r.score is not None else "N/A"
+            print(f"[{r.status.value.upper()}] {r.metric} = {score_str}")
+            print(f"  {r.explanation}")
+            if r.node_id:
+                print(f"  (node: {r.node_id})")
+            print()
+    return 0
+
+
 def _cmd_version(_: argparse.Namespace) -> int:
     print(f"rudriq {__version__}")
     return 0
@@ -86,6 +134,26 @@ def main(argv: list[str] | None = None) -> int:
         help="Write to file instead of stdout",
     )
     p_audit.set_defaults(func=_cmd_audit)
+
+    p_eval = sub.add_parser(
+        "evaluate", help="Run quality evaluators against a trace",
+    )
+    p_eval.add_argument(
+        "--run-id", required=True,
+        help="Run ID to evaluate (see rudriq.storage.get_default_storage().list_runs())",
+    )
+    p_eval.add_argument(
+        "--metrics", default="retrieval_relevance,groundedness",
+        help=(
+            "Comma-separated list of metrics to run. Available: "
+            + ", ".join(_EVALUATOR_REGISTRY)
+        ),
+    )
+    p_eval.add_argument(
+        "--format", default="text", choices=["text", "json"],
+        help="Output format (default: text)",
+    )
+    p_eval.set_defaults(func=_cmd_evaluate)
 
     p_ver = sub.add_parser("version", help="Print version")
     p_ver.set_defaults(func=_cmd_version)
