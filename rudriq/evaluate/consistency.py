@@ -165,8 +165,19 @@ class ConsistencyEvaluator:
         return groups
 
     def _extract_prompt(self, node: TraceNode) -> str:
+        """For grouping, prefer the USER message over the full prompt.
+
+        The full ``rudriq.prompt_preview`` includes any system message
+        and assembled retrieval context. The shared retrieval text
+        across distinct RAG queries dominates the embedding and wrongly
+        collapses them into one group (Day 15 finding). The Day 17
+        Thread B fix exposes ``rudriq.user_message_preview`` from the
+        OpenLLMetry messages JSON; consistency reads it first and
+        only falls back to the full prompt for legacy traces.
+        """
         md = node.metadata or {}
         for key in (
+            "rudriq.user_message_preview",
             "rudriq.prompt_preview", "gen_ai.prompt", "prompt", "input",
         ):
             val = md.get(key)

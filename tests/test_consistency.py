@@ -96,6 +96,95 @@ def test_high_consistency_for_repeated_prompt(monkeypatch):
     assert ok[0].details["group_size"] == 2
 
 
+def test_groups_by_user_message_not_full_prompt(monkeypatch):
+    """The Day 17 Thread B fix: ConsistencyEvaluator must group on the
+    user message, not on the assembled prompt. Two RAG calls with
+    DIFFERENT user questions but SIMILAR retrieval context must NOT
+    be grouped together (or the metric reports a false 1.0).
+
+    Stub strategy: distinct user messages → orthogonal vectors; the
+    full prompts (sharing retrieval context) would be near-identical
+    but the evaluator should never look at them when user_message is
+    present.
+    """
+
+    def fake_embed(texts):
+        # Each text gets a one-hot vector — orthogonal pairwise, so
+        # nothing groups regardless of shared content.
+        return [
+            [1.0 if i == j else 0.0 for j in range(len(texts))]
+            for i in range(len(texts))
+        ]
+
+    monkeypatch.setattr(
+        "rudriq.evaluate.consistency.embed_texts", fake_embed
+    )
+
+    shared_context = "Context: " + ("doc text " * 50)
+
+    def _llm_with_user_msg(nid, user_msg, full_prompt, response):
+        return TraceNode(
+            node_id=nid, kind=NodeKind.LLM_CHAT,
+            library="openai", operation="chat",
+            started_at=datetime.now(timezone.utc), ended_at=None,
+            metadata={
+                "rudriq.user_message_preview": user_msg,
+                "rudriq.prompt_preview": full_prompt,
+                "rudriq.completion_preview": response,
+            },
+        )
+
+    g = _graph([
+        _llm_with_user_msg(
+            "1", "What is topic five?", shared_context + " topic five", "answer A",
+        ),
+        _llm_with_user_msg(
+            "2", "Explain topic twelve",
+            shared_context + " topic twelve", "answer B",
+        ),
+    ])
+    results = ConsistencyEvaluator().evaluate(g)
+    # Distinct user messages → no grouping → SKIPPED (the correct
+    # answer for distinct queries), NOT a false 1.0 OK.
+    assert len(results) == 1
+    assert results[0].status == EvalStatus.SKIPPED
+    assert "distinct" in results[0].explanation
+
+
+def test_falls_back_to_full_prompt_for_legacy_traces(monkeypatch):
+    """For legacy traces without rudriq.user_message_preview, the
+    evaluator still works against the full prompt — same as before
+    Day 17 Thread B. The fix is additive, not breaking."""
+
+    monkeypatch.setattr(
+        "rudriq.evaluate.consistency.embed_texts",
+        lambda t: [[1.0, 0.0] for _ in t],
+    )
+
+    # No user_message_preview — only the legacy prompt_preview
+    def _legacy_llm(nid, prompt, response):
+        return TraceNode(
+            node_id=nid, kind=NodeKind.LLM_CHAT,
+            library="openai", operation="chat",
+            started_at=datetime.now(timezone.utc), ended_at=None,
+            metadata={
+                "rudriq.prompt_preview": prompt,
+                "rudriq.completion_preview": response,
+            },
+        )
+
+    g = _graph([
+        _legacy_llm("1", "shared prompt text", "answer A"),
+        _legacy_llm("2", "shared prompt text", "answer B"),
+    ])
+    ok = [
+        r for r in ConsistencyEvaluator().evaluate(g)
+        if r.status == EvalStatus.OK
+    ]
+    assert len(ok) == 1
+    assert ok[0].details["group_size"] == 2
+
+
 def test_low_consistency_flags_divergent_responses(monkeypatch):
     """Prompts grouped, responses divergent → low-consistency warning."""
 

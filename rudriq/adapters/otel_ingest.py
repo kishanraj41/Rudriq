@@ -120,48 +120,93 @@ def _normalize_operation(span_name: str, library: str) -> str:
     return op
 
 
-def _extract_messages_text(messages_json: str) -> str:
-    """Concatenate ``content`` from each text part of the new GenAI messages shape.
+def _parse_genai_messages(messages_json: str) -> dict[str, str]:
+    """Parse OpenLLMetry's gen_ai.input.messages JSON into role-separated text.
 
     openllmetry-openai 0.60+ (matching the OTel GenAI semconv) emits
-    ``gen_ai.input.messages`` and ``gen_ai.output.messages`` as JSON
+    ``gen_ai.input.messages`` / ``gen_ai.output.messages`` as JSON
     strings of the form::
 
         [{"role": "user", "parts": [{"type": "text", "content": "..."}]}, ...]
 
-    We pull each ``content`` from each ``parts`` entry whose ``type``
-    is ``text``, in document order, joined by newline. Non-JSON or
-    unexpected shapes return ``""`` so callers can SKIP gracefully.
+    Returns a dict with three keys:
+
+    * ``full``   — every text chunk, in document order, newline-joined
+    * ``user``   — text from ``role == "user"`` messages only
+    * ``system`` — text from ``role == "system"`` messages only
+
+    The user message is the actual question / instruction, distinct
+    from the system prompt and any assembled retrieval context.
+    Day 15 surfaced that the assembled prompt is dominated by shared
+    retrieval context across distinct RAG queries, which makes
+    similarity-based grouping (consistency) collapse them spuriously.
+    Day 17 Thread B fixes that by exposing the user-role text
+    separately for evaluators that want the bare question.
+
+    Non-JSON or unexpected shapes return all-empty so callers can
+    SKIP gracefully without distinguishing parse failures.
     """
     import json
 
+    result = {"full": "", "user": "", "system": ""}
     try:
         messages = json.loads(messages_json)
     except (TypeError, ValueError):
-        return ""
+        return result
     if not isinstance(messages, list):
-        return ""
+        return result
 
-    chunks: list[str] = []
+    full_parts: list[str] = []
+    user_parts: list[str] = []
+    system_parts: list[str] = []
+
     for msg in messages:
         if not isinstance(msg, dict):
             continue
+        role = msg.get("role", "")
+
+        # Extract this message's text content (handling both the new
+        # parts-based shape and the older content-string shape).
+        text = ""
         parts = msg.get("parts")
         if isinstance(parts, list):
+            chunks: list[str] = []
             for part in parts:
                 if isinstance(part, dict):
-                    # Per spec, ``type`` should be "text" for textual content;
-                    # accept absent type as text too (defensive).
                     if part.get("type", "text") == "text":
                         content = part.get("content")
                         if isinstance(content, str) and content.strip():
                             chunks.append(content)
+            text = "\n".join(chunks)
         else:
-            # Older shape: top-level ``content`` is a string.
             content = msg.get("content")
             if isinstance(content, str) and content.strip():
-                chunks.append(content)
-    return "\n".join(chunks)
+                text = content
+
+        if not text:
+            continue
+
+        full_parts.append(text)
+        if role == "user":
+            user_parts.append(text)
+        elif role == "system":
+            system_parts.append(text)
+
+    result["full"] = "\n".join(full_parts)
+    result["user"] = "\n".join(user_parts)
+    result["system"] = "\n".join(system_parts)
+    return result
+
+
+def _extract_messages_text(messages_json: str) -> str:
+    """Backward-compatible wrapper — returns the ``full`` blob only.
+
+    Retained so existing call sites (``_extract_input_content``,
+    ``_extract_output_content``) keep working unchanged. New call
+    sites that need role separation should use ``_parse_genai_messages``
+    directly.
+    """
+    return _parse_genai_messages(messages_json).get("full", "")
 
 
 def _gather_indexed_content(attributes: dict[str, Any], prefix: str) -> str:
@@ -295,9 +340,26 @@ def otel_span_to_node(
     from rudriq.core.config import content_capture_enabled, truncate_preview
 
     if content_capture_enabled():
-        prompt_text = _extract_input_content(attributes)
-        if prompt_text:
-            metadata["rudriq.prompt_preview"] = truncate_preview(prompt_text)
+        # Preferred path: parse the new GenAI semconv messages JSON so
+        # we can also isolate the user-role text (Day 17 Thread B —
+        # the assembled prompt is dominated by shared retrieval
+        # context across distinct queries, which confounds
+        # similarity-based grouping like ConsistencyEvaluator).
+        input_messages_json = attributes.get("gen_ai.input.messages")
+        if isinstance(input_messages_json, str) and input_messages_json:
+            parsed = _parse_genai_messages(input_messages_json)
+            if parsed["full"]:
+                metadata["rudriq.prompt_preview"] = truncate_preview(parsed["full"])
+            if parsed["user"]:
+                metadata["rudriq.user_message_preview"] = truncate_preview(parsed["user"])
+        else:
+            # Legacy openllmetry (<0.60): only the indexed shape is
+            # available; we can't reliably separate roles from there,
+            # so user_message_preview is omitted in this branch.
+            prompt_text = _gather_indexed_content(attributes, prefix="gen_ai.prompt")
+            if prompt_text:
+                metadata["rudriq.prompt_preview"] = truncate_preview(prompt_text)
+
         completion_text = _extract_output_content(attributes)
         if completion_text:
             metadata["rudriq.completion_preview"] = truncate_preview(completion_text)

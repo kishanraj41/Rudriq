@@ -10,10 +10,14 @@ _(All Critical-priority items resolved as of Day 11. Remaining work is Important
 
 ### Important but deferable
 
-#### Evaluation engine — consistency grouping picks up retrieval context
-**Status:** Open (Day 15 validation finding)
+#### Evaluation engine — consistency grouping when retrieval lives inside the user message
+**Status:** Partial fix landed Day 17 Thread B; residual is a property of prompt-assembly choice
 
-`ConsistencyEvaluator` groups LLM calls by prompt cosine similarity (default 0.85). In the realistic pipeline, all 20 distinct user queries collapsed into one group because `rudriq.prompt_preview` is the *assembled* prompt (user message + prepended retrieved docs), and the shared retrieval dominates the embedding. Fix options: (a) capture the user message separately as `rudriq.user_message_preview` (smallest change to current data shape); (b) raise the default `group_threshold` to 0.95; (c) embed only the last N chars of the prompt (the user message typically lands there). (a) is the most defensible since it preserves the assembled prompt for other evaluators that legitimately want the full input.
+Day 17 Thread B added role-separated capture: `rudriq.user_message_preview` is the user-role text only, distinct from any system message in `rudriq.prompt_preview`. ConsistencyEvaluator prefers the user message for grouping. Where the system message carries retrieval context, the fix fully resolves the artifact.
+
+Residual: pipelines that put retrieval context *inside* the user-role message (e.g., `Context:...Question: <q>` as one user turn — the realistic demo's pattern) still see shared context dominate the embedding. Confirmed on `examples/realistic_rag_pipeline.py`: consistency still groups all 20 distinct queries together because their user-role content is structurally similar.
+
+This is a prompt-assembly choice, not a metric bug. The fix that's defensible without becoming brittle: detect a `Question:` / `Query:` / `User:` delimiter inside the user message and embed only what follows. Fragile across pipelines; left for a future session that has a representative cross-pipeline corpus to validate against. The user-role separation alone is a real correctness win for RAG patterns that follow the OpenAI/Anthropic recommended "retrieval-in-system" convention.
 
 #### Concurrency-safe input stash
 **Status:** Resolved (Day 12 Phase C, v0.0.9.dev1)
