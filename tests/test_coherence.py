@@ -84,6 +84,25 @@ def test_high_coherence_when_aligned(monkeypatch):
     assert "Response-to-context coherence" in ok[0].explanation
 
 
+def test_embedding_call_skipped_as_not_applicable():
+    """Embedding spans → coherence not_applicable (no response text)."""
+    emb = _node("emb1", NodeKind.LLM_EMBEDDING, {"rudriq.prompt_preview": "x"})
+    doc = _node("doc1", NodeKind.DATA_READ, {"rudriq.content_preview": "ctx"})
+    edge = TraceEdge(
+        parent_id="doc1", child_id="emb1", kind=EdgeKind.LINEAGE_LINK,
+        confidence=0.7, link_method=LinkMethod.SUBSTRING, metadata={},
+    )
+    g = TraceGraph(
+        run_id="r", created_at=datetime.now(timezone.utc), metadata={},
+        nodes=[emb, doc], edges=[edge],
+    )
+    results = CoherenceEvaluator().evaluate(g)
+    emb_results = [r for r in results if r.node_id == "emb1"]
+    assert len(emb_results) == 1
+    assert emb_results[0].status == EvalStatus.SKIPPED
+    assert emb_results[0].details.get("not_applicable") is True
+
+
 def test_low_coherence_flags_decorative_retrieval(monkeypatch):
     """Orthogonal vectors → low coherence → decorative-retrieval warning."""
     monkeypatch.setattr(

@@ -115,19 +115,24 @@ def test_export_json_summary_counts_match_graph(temp_db):
     assert s["libraries_seen"] == ["openai", "pandas"]
 
 
-def test_export_json_is_deterministic(temp_db, monkeypatch):
-    """Same graph + pinned generated_at → byte-identical output."""
-    from rudriq.export import audit
+def test_export_json_is_deterministic(temp_db):
+    """Same graph → byte-identical output, no freezing required.
 
-    monkeypatch.setattr(
-        audit, "_now_utc_iso", lambda: "2026-05-02T15:00:00+00:00"
-    )
+    Day 17 Thread A removed ``generated_at`` from the report body; the
+    only previously non-deterministic field. Reports are now fully
+    reproducible — a compliance workflow can hash the output to prove
+    it is the exact artifact the system produced.
+    """
+    from rudriq.export import audit
 
     temp_db.replace_run(_build_rag_graph())
     out1 = audit.export_audit_json("audit-rag-1")
     out2 = audit.export_audit_json("audit-rag-1")
 
     assert out1 == out2
+    # And no export-time field has leaked back in.
+    import json
+    assert "generated_at" not in json.loads(out1)
 
 
 def test_export_json_is_deterministic_across_db_instances(tmp_path, monkeypatch):
@@ -135,14 +140,10 @@ def test_export_json_is_deterministic_across_db_instances(tmp_path, monkeypatch)
 
     This is the stronger determinism claim: not just stable within one
     process, but stable across DuckDB instances regardless of internal
-    row return order.
+    row return order. After Day 17 Thread A, no time-freezing is needed.
     """
     from rudriq.export import audit
     from rudriq.storage import duckdb_backend
-
-    monkeypatch.setattr(
-        audit, "_now_utc_iso", lambda: "2026-05-02T15:00:00+00:00"
-    )
 
     db1 = duckdb_backend.DuckDBStorage(db_path=tmp_path / "db1.duckdb")
     db2 = duckdb_backend.DuckDBStorage(db_path=tmp_path / "db2.duckdb")

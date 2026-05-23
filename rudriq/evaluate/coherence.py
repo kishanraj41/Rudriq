@@ -56,6 +56,26 @@ class CoherenceEvaluator:
             ]
 
         for llm in llm_nodes:
+            # Embedding calls have no response text by spec — their
+            # output is a vector. Coherence (whole-response vs whole-
+            # context similarity) genuinely doesn't apply. Mark
+            # not_applicable so the audit report can suppress these
+            # from Notable findings — they're not a gap, they're the
+            # wrong metric for this node kind.
+            if llm.kind.value == "llm_embedding":
+                results.append(
+                    EvalResult(
+                        metric=self.metric, status=EvalStatus.SKIPPED, score=None,
+                        explanation=(
+                            "Not applicable: embedding calls produce vectors, "
+                            "not text — coherence has no response to score."
+                        ),
+                        node_id=llm.node_id,
+                        details={"not_applicable": True},
+                    )
+                )
+                continue
+
             response_text = self._extract_response_text(llm)
             if not response_text:
                 results.append(

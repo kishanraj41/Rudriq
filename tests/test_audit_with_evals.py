@@ -102,20 +102,49 @@ def test_markdown_without_evals_omits_quality_section(storage_with_run):
 
 # ---------------------------------------------------------------------------
 # Determinism (load-bearing): byte-identical output across two exports.
-# Freezes ``_now_utc_iso`` because the top-level ``generated_at`` is
-# documented as the one non-deterministic field.
+# After Day 17 Thread A, this is the unconditional claim — no time
+# freezing required. ``generated_at`` was removed from the report body
+# because the export wall-clock is not an auditable property of the run
+# being described. A compliance workflow can hash the report to prove
+# it is the exact artifact the system produced.
 # ---------------------------------------------------------------------------
 
 
 def test_json_with_evals_is_deterministic(storage_with_run, monkeypatch):
+    """Two exports of the same run must be byte-identical. No exceptions.
+
+    This is the audit-grade property: hashing the report yields the
+    same digest on every export. Any non-determinism (including export
+    timestamps) breaks the tamper-evidence claim.
+    """
     _stub_embeddings_for_all(monkeypatch)
-    monkeypatch.setattr(
-        "rudriq.export.audit._now_utc_iso",
-        lambda: "2026-05-23T12:00:00+00:00",
-    )
 
     out1 = export_audit_json("audit-eval-run", include_evals=True)
     out2 = export_audit_json("audit-eval-run", include_evals=True)
+    assert out1 == out2, "Audit JSON is not byte-deterministic"
+    # And no export-time field has leaked back in.
+    report = json.loads(out1)
+    assert "generated_at" not in report
+
+
+def test_markdown_with_evals_is_deterministic(storage_with_run, monkeypatch):
+    """Markdown audit is byte-deterministic too — same audit-grade claim
+    extends to the human-readable artifact (hashing the .md still works).
+    """
+    _stub_embeddings_for_all(monkeypatch)
+
+    out1 = export_audit_markdown("audit-eval-run", include_evals=True)
+    out2 = export_audit_markdown("audit-eval-run", include_evals=True)
+    assert out1 == out2, "Audit Markdown is not byte-deterministic"
+    # No `**Generated at:**` line should remain.
+    assert "Generated at" not in out1
+
+
+def test_markdown_without_evals_is_deterministic(storage_with_run):
+    """Determinism holds without --include-evals too (no embedding
+    calls to worry about; pure graph render)."""
+    out1 = export_audit_markdown("audit-eval-run", include_evals=False)
+    out2 = export_audit_markdown("audit-eval-run", include_evals=False)
     assert out1 == out2
 
 
@@ -197,6 +226,91 @@ def test_run_audit_evaluations_ordering_is_stable(storage_with_run, monkeypatch)
 # ---------------------------------------------------------------------------
 # Notable-findings list surfaces non-OK and sub-green results in Markdown
 # ---------------------------------------------------------------------------
+
+
+def test_summarize_separates_not_applicable_from_total():
+    """``not_applicable`` SKIPs are subtracted from applicable_total so
+    'Evaluated' reads honestly: e.g. an all-green metric with 3 spec-
+    correct skips reports 20/20, not 20/23."""
+    eval_dicts = [
+        {"metric": "groundedness", "status": "ok", "score": 0.9, "node_id": "n1"},
+        {"metric": "groundedness", "status": "ok", "score": 0.8, "node_id": "n2"},
+        {"metric": "groundedness", "status": "skipped", "score": None,
+         "node_id": "emb1", "details": {"not_applicable": True}},
+        {"metric": "groundedness", "status": "skipped", "score": None,
+         "node_id": "missing_data", "details": {}},
+    ]
+    summary = _summarize_evaluations(eval_dicts)
+    g = summary["groundedness"]
+    assert g["evaluated"] == 2
+    assert g["total"] == 4
+    assert g["not_applicable"] == 1
+    assert g["applicable_total"] == 3  # 4 - 1 NA = 3 applicable, 2 evaluated
+
+
+def test_markdown_notable_findings_omit_not_applicable(storage_with_run, monkeypatch):
+    """The Notable findings list must exclude not_applicable SKIPs.
+
+    A groundedness SKIP on an embedding span is correct behavior, not
+    a finding for the auditor to investigate. Listing it would make
+    the report noisier and erode trust in 'notable means notable.'
+    """
+    _stub_embeddings_for_all(monkeypatch)
+
+    # Add a not-applicable SKIP node (an llm_embedding) to the run.
+    storage = storage_with_run
+    graph = storage.load_run("audit-eval-run")
+    base = graph.created_at
+    emb = TraceNode(
+        node_id="emb_extra", kind=NodeKind.LLM_EMBEDDING,
+        library="openai", operation="embeddings",
+        started_at=base, ended_at=base,
+        metadata={"rudriq.prompt_preview": "text to embed"},
+    )
+    graph.add_node(emb)
+    graph.add_edge(TraceEdge(
+        parent_id="doc1", child_id="emb_extra", kind=EdgeKind.LINEAGE_LINK,
+        confidence=0.9, link_method=LinkMethod.OBJECT_IDENTITY, metadata={},
+    ))
+    storage.replace_run(graph)
+
+    out = export_audit_markdown("audit-eval-run", include_evals=True)
+    # Spec-correct embedding SKIP must NOT appear in Notable findings.
+    # Scope the assertion to the Notable findings block only — the same
+    # node_id legitimately appears in the Full Operations Appendix.
+    if "### Notable findings" in out:
+        after = out.split("### Notable findings", 1)[1]
+        # The notable block ends at the next `##` heading (the Full
+        # Operations Appendix) or end of file.
+        notable_block = after.split("\n##", 1)[0]
+        assert "emb_extra" not in notable_block, (
+            "not_applicable SKIPs must be suppressed from Notable findings"
+        )
+
+
+def test_markdown_summary_table_shows_not_applicable_count(storage_with_run, monkeypatch):
+    """The summary table surfaces the not_applicable count in Notes."""
+    _stub_embeddings_for_all(monkeypatch)
+
+    storage = storage_with_run
+    graph = storage.load_run("audit-eval-run")
+    base = graph.created_at
+    emb = TraceNode(
+        node_id="emb_extra2", kind=NodeKind.LLM_EMBEDDING,
+        library="openai", operation="embeddings",
+        started_at=base, ended_at=base,
+        metadata={"rudriq.prompt_preview": "text"},
+    )
+    graph.add_node(emb)
+    graph.add_edge(TraceEdge(
+        parent_id="doc1", child_id="emb_extra2", kind=EdgeKind.LINEAGE_LINK,
+        confidence=0.9, link_method=LinkMethod.OBJECT_IDENTITY, metadata={},
+    ))
+    storage.replace_run(graph)
+
+    out = export_audit_markdown("audit-eval-run", include_evals=True)
+    # The summary table now has a Notes column carrying 'N not applicable'.
+    assert "not applicable" in out.lower()
 
 
 def test_markdown_lists_notable_findings(storage_with_run, monkeypatch):

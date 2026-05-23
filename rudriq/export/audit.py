@@ -348,6 +348,14 @@ def _summarize_evaluations(
             i for i in items
             if i["status"] == "ok" and i.get("score") is not None
         ]
+        # Day 17 Thread A: distinguish spec-correct "not applicable"
+        # SKIPs (the evaluator wasn't meant for this node kind) from
+        # the total count so the "Evaluated" ratio is honest.
+        not_applicable_count = sum(
+            1 for i in items
+            if (i.get("details") or {}).get("not_applicable", False)
+        )
+
         status_counts: dict[str, int] = {}
         for i in items:
             status_counts[i["status"]] = status_counts.get(i["status"], 0) + 1
@@ -371,6 +379,8 @@ def _summarize_evaluations(
             "traffic_light": light,
             "status_counts": status_counts,
             "evaluated": len(ok_scored),
+            "applicable_total": len(items) - not_applicable_count,
+            "not_applicable": not_applicable_count,
             "total": len(items),
         }
     return summary
@@ -433,7 +443,15 @@ def export_audit_json(
 
     report = {
         "schema_version": AUDIT_SCHEMA_VERSION,
-        "generated_at": _now_utc_iso(),
+        # No ``generated_at`` here — Day 17 Thread A. The audit report
+        # describes a run, which has its own ``created_at`` (preserved
+        # below). The export wall-clock is not an auditable property,
+        # and including it broke byte-determinism: a compliance
+        # workflow that hashes the report to prove it's the exact
+        # artifact the system produced got a different hash on every
+        # export. If operational provenance is needed, write it to a
+        # sidecar (or print to stderr in the CLI) — never into the
+        # hashable body.
         "summary": summary,
         "run": {
             "run_id": graph.run_id,
@@ -452,11 +470,6 @@ def export_audit_json(
     }
 
     return json.dumps(report, indent=2, sort_keys=True, default=str)
-
-
-def _now_utc_iso() -> str:
-    """Wrapped for monkey-patching in determinism tests."""
-    return datetime.now(timezone.utc).isoformat()
 
 
 # ---------------------------------------------------------------------------
@@ -486,8 +499,8 @@ def _render_eval_markdown(
         )
         return lines
 
-    lines.append("| Metric | Status | Mean Score | Evaluated |")
-    lines.append("|---|---|---|---|")
+    lines.append("| Metric | Status | Mean Score | Evaluated | Notes |")
+    lines.append("|---|---|---|---|---|")
     for metric in sorted(eval_summary):
         s = eval_summary[metric]
         light = lights.get(s["traffic_light"], "⚪")
@@ -495,15 +508,30 @@ def _render_eval_markdown(
             f"{s['mean_score']:.2f}"
             if s["mean_score"] is not None else "N/A"
         )
+        # "Evaluated" reports against ``applicable_total`` so spec-
+        # correct not-applicable SKIPs don't make a fully-working
+        # metric look like it failed partially. The not_applicable
+        # count is surfaced separately in the Notes column.
+        applicable = s.get("applicable_total", s["total"])
+        not_app = s.get("not_applicable", 0)
+        notes = f"{not_app} not applicable" if not_app else ""
         lines.append(
             f"| {metric} | {light} {s['traffic_light']} | "
-            f"{score} | {s['evaluated']}/{s['total']} |"
+            f"{score} | {s['evaluated']}/{applicable} | {notes} |"
         )
 
+    # Filter Notable findings to actual issues: non-OK results and
+    # sub-green scores, but suppress entries flagged ``not_applicable``
+    # (Day 17 Thread A — e.g. groundedness/coherence on embedding spans:
+    # those SKIPs are correct, not a gap, and listing them as
+    # "findings" misleads the auditor).
     notable = [
         d for d in eval_dicts
-        if d["status"] != "ok"
-        or (d.get("score") is not None and d["score"] < _TRAFFIC_GREEN_MIN)
+        if (
+            d["status"] != "ok"
+            or (d.get("score") is not None and d["score"] < _TRAFFIC_GREEN_MIN)
+        )
+        and not (d.get("details") or {}).get("not_applicable", False)
     ]
     if notable:
         lines.extend(["", "### Notable findings", ""])
@@ -568,11 +596,14 @@ def export_audit_markdown(
 
     lines: list[str] = []
 
-    # Header
+    # Header — Day 17 Thread A: no export-time line. The report
+    # describes a run; the run's own creation timestamp lives in the
+    # Summary section below. Including a wall-clock export timestamp
+    # would break byte-determinism (two exports of the same run would
+    # disagree only on that line).
     lines.append("# RudriQ Audit Report")
     lines.append("")
     lines.append(f"**Run ID:** `{graph.run_id}`  ")
-    lines.append(f"**Generated at:** {_now_utc_iso()}  ")
     lines.append(f"**Schema version:** `{AUDIT_SCHEMA_VERSION}`")
     lines.append("")
 

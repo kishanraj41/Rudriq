@@ -98,6 +98,35 @@ def test_high_groundedness_when_response_matches_context(monkeypatch):
     assert ok[0].details["grounded_sentences"] == ok[0].details["total_sentences"]
 
 
+def test_embedding_call_skipped_as_not_applicable():
+    """Embedding spans have no response by spec — groundedness flags
+    not_applicable so the audit report can suppress the noise.
+
+    The SKIP is correct (no response to score). What was wrong before
+    Day 17 Thread A was that this SKIP appeared in the audit report's
+    Notable findings as if it were a gap. The ``not_applicable`` flag
+    in details lets the renderer distinguish "doesn't apply here" from
+    "missing data we should have."
+    """
+    emb = _node("emb1", NodeKind.LLM_EMBEDDING, {"rudriq.prompt_preview": "x"})
+    doc = _node("doc1", NodeKind.DATA_READ, {"rudriq.content_preview": "context"})
+    edge = TraceEdge(
+        parent_id="doc1", child_id="emb1", kind=EdgeKind.LINEAGE_LINK,
+        confidence=0.7, link_method=LinkMethod.SUBSTRING, metadata={},
+    )
+    graph = TraceGraph(
+        run_id="r", created_at=datetime.now(timezone.utc), metadata={},
+        nodes=[emb, doc], edges=[edge],
+    )
+
+    results = GroundednessEvaluator().evaluate(graph)
+    emb_results = [r for r in results if r.node_id == "emb1"]
+    assert len(emb_results) == 1
+    assert emb_results[0].status == EvalStatus.SKIPPED
+    assert emb_results[0].details.get("not_applicable") is True
+    assert "Not applicable" in emb_results[0].explanation
+
+
 def test_low_groundedness_flags_ungrounded(monkeypatch):
     """Response sentences orthogonal to context → score 0."""
 
