@@ -98,6 +98,40 @@ The first matching strategy wins. Match results are persisted as `LINEAGE_LINK` 
 
 The data lineage substrate is **[AutoLineage](https://github.com/kishanraj41/autolineage)** (v0.5+), which captures pandas, scikit-learn, and PySpark operations and exposes a callback API that RudriQ wires into.
 
+## Data handling and content capture
+
+RudriQ is built for regulated environments. **By default, RudriQ does not store the content of your prompts, LLM responses, or source documents.** It captures operation metadata — shapes, timings, model names, token counts, lineage links — but not the text itself.
+
+### Enabling content capture for evaluation
+
+RudriQ's evaluation engine (groundedness, retrieval relevance) needs text content to compute semantic scores. To enable it, set:
+
+```bash
+export RUDRIQ_CAPTURE_CONTENT=true
+```
+
+When enabled:
+
+- RudriQ stores **truncated previews** (default 500 characters, configurable via `RUDRIQ_PREVIEW_CHARS`, clamped to 50–10000) of prompts, responses, and document content.
+- Previews are stored **only in your local DuckDB** (`~/.rudriq/traces.duckdb`). RudriQ Core makes no outbound network calls; content never leaves your environment.
+- The flag is read at process start (RudriQ propagates it to OpenLLMetry's content capture and to the AutoLineage mirror callback). Toggling it does not retroactively redact previously captured runs.
+- You can stop capturing at any time by unsetting the variable. Previously stored previews remain in the local database until you delete the run.
+
+### For compliance teams
+
+If your prompts or documents contain PII or PHI, evaluate whether content capture is appropriate for your environment. Recommended patterns:
+
+- Run evaluation in non-production environments with synthetic data; keep capture disabled in production and rely on metadata-only tracing there.
+- Use a short `RUDRIQ_PREVIEW_CHARS` limit (e.g. 100) to minimize stored content while keeping enough for semantic evaluation.
+- Audit the captured previews directly in DuckDB before sharing exports with auditors:
+
+  ```sql
+  SELECT node_id, metadata FROM nodes
+  WHERE json_extract(metadata, '$."rudriq.prompt_preview"') IS NOT NULL;
+  ```
+
+RudriQ's default-off posture means you opt into content storage deliberately, never by accident.
+
 ## Status: pre-alpha (v0.0.5)
 
 Currently in active 30-day sprint development. v1.0 target: November 2026.

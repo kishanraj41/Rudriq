@@ -162,9 +162,11 @@ class GroundednessEvaluator:
 
     def _extract_response_text(self, llm_node: TraceNode) -> str:
         md = llm_node.metadata or {}
+        # rudriq.completion_preview is what our adapter stores when
+        # content capture is enabled (Day 14).
         for key in (
-            "gen_ai.completion", "response_preview", "completion",
-            "response", "output",
+            "rudriq.completion_preview", "gen_ai.completion",
+            "response_preview", "completion", "response", "output",
         ):
             val = md.get(key)
             if isinstance(val, str) and val.strip():
@@ -182,7 +184,10 @@ class GroundednessEvaluator:
             if node is None:
                 continue
             md = node.metadata or {}
-            for key in ("output_preview", "content", "text", "value"):
+            for key in (
+                "rudriq.content_preview",
+                "output_preview", "content", "text", "value",
+            ):
                 val = md.get(key)
                 if isinstance(val, str) and val.strip():
                     texts.append(val)

@@ -120,6 +120,95 @@ def _normalize_operation(span_name: str, library: str) -> str:
     return op
 
 
+def _extract_messages_text(messages_json: str) -> str:
+    """Concatenate ``content`` from each text part of the new GenAI messages shape.
+
+    openllmetry-openai 0.60+ (matching the OTel GenAI semconv) emits
+    ``gen_ai.input.messages`` and ``gen_ai.output.messages`` as JSON
+    strings of the form::
+
+        [{"role": "user", "parts": [{"type": "text", "content": "..."}]}, ...]
+
+    We pull each ``content`` from each ``parts`` entry whose ``type``
+    is ``text``, in document order, joined by newline. Non-JSON or
+    unexpected shapes return ``""`` so callers can SKIP gracefully.
+    """
+    import json
+
+    try:
+        messages = json.loads(messages_json)
+    except (TypeError, ValueError):
+        return ""
+    if not isinstance(messages, list):
+        return ""
+
+    chunks: list[str] = []
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        parts = msg.get("parts")
+        if isinstance(parts, list):
+            for part in parts:
+                if isinstance(part, dict):
+                    # Per spec, ``type`` should be "text" for textual content;
+                    # accept absent type as text too (defensive).
+                    if part.get("type", "text") == "text":
+                        content = part.get("content")
+                        if isinstance(content, str) and content.strip():
+                            chunks.append(content)
+        else:
+            # Older shape: top-level ``content`` is a string.
+            content = msg.get("content")
+            if isinstance(content, str) and content.strip():
+                chunks.append(content)
+    return "\n".join(chunks)
+
+
+def _gather_indexed_content(attributes: dict[str, Any], prefix: str) -> str:
+    """Legacy: collect content from indexed gen_ai attributes.
+
+    openllmetry < 0.60 emitted ``gen_ai.prompt.0.content``,
+    ``gen_ai.prompt.1.content``, etc. Newer versions use the
+    JSON-encoded ``gen_ai.input.messages`` shape handled by
+    ``_extract_messages_text``. Keep this helper as a fallback so we
+    work across instrumentor versions.
+    """
+    items: list[tuple[int, str]] = []
+    suffix = ".content"
+    for key, val in attributes.items():
+        if key.startswith(prefix) and key.endswith(suffix):
+            if not isinstance(val, str):
+                continue
+            parts = key.split(".")
+            try:
+                idx = int(parts[-2])
+            except (ValueError, IndexError):
+                idx = 0
+            items.append((idx, val))
+    items.sort(key=lambda t: t[0])
+    return "\n".join(v for _, v in items)
+
+
+def _extract_input_content(attributes: dict[str, Any]) -> str:
+    """Pull prompt/input text from a span's attributes across semconv versions."""
+    new = attributes.get("gen_ai.input.messages")
+    if isinstance(new, str):
+        text = _extract_messages_text(new)
+        if text:
+            return text
+    return _gather_indexed_content(attributes, prefix="gen_ai.prompt")
+
+
+def _extract_output_content(attributes: dict[str, Any]) -> str:
+    """Pull completion/output text from a span's attributes across semconv versions."""
+    new = attributes.get("gen_ai.output.messages")
+    if isinstance(new, str):
+        text = _extract_messages_text(new)
+        if text:
+            return text
+    return _gather_indexed_content(attributes, prefix="gen_ai.completion")
+
+
 def _extract_metadata(attributes: dict[str, Any]) -> dict[str, Any]:
     """
     Pull a useful subset of GenAI semantic attributes into our metadata
@@ -197,6 +286,21 @@ def otel_span_to_node(
     for k, v in attributes.items():
         if k.startswith("rudriq."):
             metadata[k] = v
+
+    # Content previews — ONLY when capture is explicitly enabled. OpenLLMetry
+    # stores prompt/completion as gen_ai.prompt.N.content / gen_ai.completion.N.content
+    # when its own content-capture env var is set. We mirror that into a
+    # RudriQ-namespaced, truncated preview so it's unambiguously OUR stored
+    # copy (not raw OTel) and downstream consumers know it's bounded.
+    from rudriq.core.config import content_capture_enabled, truncate_preview
+
+    if content_capture_enabled():
+        prompt_text = _extract_input_content(attributes)
+        if prompt_text:
+            metadata["rudriq.prompt_preview"] = truncate_preview(prompt_text)
+        completion_text = _extract_output_content(attributes)
+        if completion_text:
+            metadata["rudriq.completion_preview"] = truncate_preview(completion_text)
 
     return TraceNode(
         node_id=span_id,

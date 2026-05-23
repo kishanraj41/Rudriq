@@ -138,7 +138,13 @@ class RetrievalRelevanceEvaluator:
         name; the rest are RudriQ/AutoLineage conventions.
         """
         md = llm_node.metadata or {}
-        for key in ("gen_ai.prompt", "input_preview", "prompt", "input"):
+        # rudriq.prompt_preview is what our adapter stores when content
+        # capture is enabled (Day 14). The remaining keys cover manually-
+        # populated traces and pre-Day-14 conventions.
+        for key in (
+            "rudriq.prompt_preview", "gen_ai.prompt",
+            "input_preview", "prompt", "input",
+        ):
             val = md.get(key)
             if isinstance(val, str) and val.strip():
                 return val
@@ -156,7 +162,12 @@ class RetrievalRelevanceEvaluator:
             if node is None:
                 continue
             md = node.metadata or {}
-            for key in ("output_preview", "content", "text", "value"):
+            # rudriq.content_preview is what our mirror callback stores
+            # when content capture is enabled (Day 14).
+            for key in (
+                "rudriq.content_preview",
+                "output_preview", "content", "text", "value",
+            ):
                 val = md.get(key)
                 if isinstance(val, str) and val.strip():
                     texts.append(val)

@@ -10,23 +10,10 @@ _(All Critical-priority items resolved as of Day 11. Remaining work is Important
 
 ### Important but deferable
 
-#### Evaluation engine — content-preview enrichment for evaluators
-**Status:** Open (surfaced Day 13)
-**Origin:** Day 13 validation against `examples/realistic_rag_pipeline.py`
-
-The Day 13 eval framework + 2 evaluators (`retrieval_relevance`, `groundedness`) are in. Validation against the realistic pipeline produced SKIPPED for every LLM node: the metadata RudriQ persists for spans and AL records carries identity/usage/timing/links but **no text content**.
-
-Exact gap inventory from the validation run:
-
-* LLM nodes (`llm_chat`, `llm_embedding`) carry `gen_ai.operation.name`, `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.usage.*`, and our `rudriq.lineage_parent / link_method / link_confidence / domain` — but NOT `gen_ai.prompt` or `gen_ai.completion`. openllmetry-openai gates prompt/completion capture behind opt-in env (e.g., `TRACELOOP_TRACE_CONTENT=true` / OTel's `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true`). Worth wiring this into our `[llm]` extra docs and the realistic pipeline.
-* Data nodes (`data_read`, `data_transform`) carry `autolineage.shape / columns / content_hash / source / duration_ms` — but NOT a content preview. AutoLineage's record model doesn't include sample rows. Likely fix: have rudriq's mirror callback capture a small preview (e.g., first N strings of the relevant column) at record time and persist as `autolineage.preview` in node metadata.
-
-Both fixes are mechanical and unlock the existing evaluators end-to-end. Evaluators already produce SKIPPED (not ERROR) when these are missing — they're the right correctness behavior; the gap is upstream metadata enrichment.
-
 #### Evaluation engine — three more evaluators
 **Status:** Open (deferred from Day 13)
 
-Day 13 shipped framework + 2 of the planned 5 evaluators. Remaining for Day 14: drift (response distribution change over time), consistency (same prompt → same answer across runs), coherence (response internal logical structure). Framework is designed so adding these is mechanical: implement a class with `metric` + `evaluate(graph) → list[EvalResult]`, register it in `_EVALUATOR_REGISTRY` in `rudriq/cli.py`.
+Day 13 shipped framework + 2 of the planned 5 evaluators; Day 14 added content-preview enrichment so they produce real scores. Remaining for Day 15: drift (response distribution change over time), consistency (same prompt → same answer across runs), coherence (response internal logical structure). Framework is designed so adding these is mechanical: implement a class with `metric` + `evaluate(graph) → list[EvalResult]`, register it in `_EVALUATOR_REGISTRY` in `rudriq/cli.py`.
 
 #### Concurrency-safe input stash
 **Status:** Resolved (Day 12 Phase C, v0.0.9.dev1)
@@ -67,6 +54,35 @@ The CLI accepts `--format pdf` and prints a friendly error pointing at pandoc. R
 `generate_audit_report(template="custom-internal")` raises NotImplementedError. Real templates would let a customer supply their own Jinja2 template that maps the trace graph onto their internal compliance format. Deferred to v0.3.
 
 ## Resolved
+
+### Day 14 — Opt-in content-preview capture for evaluation ✅
+**Resolved:** May 23, 2026 (Day 14, v0.1.0.dev1)
+
+Day 13's eval framework + 2 evaluators were SKIPPING on every node because RudriQ persisted operation metadata but no text content. Day 14 unblocks them: opt-in, privacy-conscious, default-off content capture on both LLM and data sides.
+
+**Config (`rudriq/core/config.py`):** `RUDRIQ_CAPTURE_CONTENT` (default off — operator must explicitly enable), `RUDRIQ_PREVIEW_CHARS` (default 500, clamped 50–10000). Read on every call so capture can be toggled without process restart and tests can `monkeypatch.setenv` without resetting cached state.
+
+**LLM-side (`rudriq/auto.py` + `rudriq/adapters/otel_ingest.py`):**
+- `_activate_traceloop` propagates `TRACELOOP_TRACE_CONTENT=true` and `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true` to openllmetry — but only when RudriQ's flag is on.
+- otel ingest extracts content from openllmetry 0.60's new semconv (`gen_ai.input.messages`, `gen_ai.output.messages` — JSON arrays of `{role, parts:[{type:text, content}]}`) with a fallback to the pre-0.60 indexed shape (`gen_ai.prompt.N.content`). Stored as truncated `rudriq.prompt_preview` / `rudriq.completion_preview` in node metadata.
+
+**Data-side (mirror + assign_id callbacks):**
+- Reuses the substring linker's `_extract_strings` (Day 10) for str / list / pandas Series of strings.
+- DataFrame fallback samples the first 5 rows of a string-typed column. Column choice via `obj.dtypes` (NOT `obj[col]`) — crucial because our patched `DataFrame.__getitem__` would otherwise propagate the iterated column's lid into `_content_registry` first-write-wins, locking the registry to whichever column scans first (typically `doc_id`) and starving the substring linker of actual text. Preferred column names: text, content, document, body, message, response, prompt; fall back to first string column.
+- Mirror callback reordered to look up `obj` early (single strong ref carried through preview extraction and register_object_identity) instead of looking it up twice.
+
+**Evaluators** now read the new preview keys in addition to legacy ones.
+
+**Privacy docs:** README "Data handling and content capture" section. Default-off posture, local DuckDB only, no outbound network calls — pitched at the regulated-buyer audience.
+
+**Validation:** realistic pipeline with `RUDRIQ_CAPTURE_CONTENT=true` produces:
+- 43/43 LLM nodes with `rudriq.prompt_preview`
+- 20/43 LLM nodes with `rudriq.completion_preview` (chats; embeddings have no output text per spec)
+- 10/11 data nodes with `rudriq.content_preview`; 3/3 linked-parent data nodes covered
+- Real evaluator scores: `retrieval_relevance` 23/23 OK (mean 0.93), `groundedness` 20/20 OK + 3 SKIPPED (embedding spans have no response)
+- 23/43 LLM-call lineage linkage preserved end-to-end (no regression)
+
+8 new tests in `tests/test_content_capture_config.py`. 159 total passing.
 
 ### Day 12 Phase A — PyPI publish of autolineage 0.6.1 ✅
 **Resolved:** May 15, 2026 (Day 12 Phase A, v0.0.9)

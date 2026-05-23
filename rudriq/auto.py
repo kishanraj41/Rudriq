@@ -18,6 +18,7 @@ Importing this module is idempotent — calling it twice has no extra effect.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any
 
@@ -99,6 +100,97 @@ def _autolineage_record_to_started_at(record: Any) -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _extract_obj_preview(obj: Any) -> str:
+    """Best-effort content preview for a tracked Python object.
+
+    Handles, in order:
+
+    * str, list/tuple of str, pandas Series of str — via the substring
+      linker's ``_extract_strings`` (the same shapes the linker uses).
+    * pandas DataFrame — first 5 rows of the first string-typed column.
+      The RAG pattern keeps document text in a single column (e.g.,
+      ``df['text']``), so previewing that column samples the actual
+      content the LLM will eventually see.
+
+    Final truncation to the configured char limit happens in
+    ``truncate_preview`` — keeping the row cap small here is just a
+    guard against extracting an absurd number of strings before
+    truncating.
+
+    Returns "" for objects with no extractable text (numbers, custom
+    classes, DataFrames with no string columns), in which case
+    content-based evaluators SKIP gracefully rather than crash.
+    """
+    if obj is None:
+        return ""
+    try:
+        from rudriq.linker import _extract_strings
+
+        strings = _extract_strings(obj, max_strings=5)
+        if strings:
+            return "\n".join(str(s) for s in strings)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # DataFrame fallback: sample a string-typed column.
+    #
+    # Column selection priority: prefer columns named like ``text`` or
+    # ``content`` over arbitrary first-string-column, since the RAG
+    # pattern keeps document body text in such a column while ID/code
+    # columns (e.g. ``doc_id``) are also string-typed but useless for
+    # semantic evaluation. Fall back to the first string column when no
+    # named candidate exists.
+    #
+    # CRITICAL — DO NOT use ``obj[col]`` to inspect column dtype. Our
+    # patched ``DataFrame.__getitem__`` (install_pandas_lid_propagation)
+    # propagates the parent's lid onto the result Series AND populates
+    # ``_content_registry[parent_lid]`` first-write-wins via
+    # ``register_object_identity``. Iterating columns with ``obj[col]``
+    # would lock the registry to whichever column iterates first
+    # (typically ``doc_id``), starving the substring linker of text.
+    # We use ``obj.dtypes`` (which doesn't trigger __getitem__) for the
+    # selection scan, then access the chosen column exactly once.
+    try:
+        import pandas as pd
+
+        if isinstance(obj, pd.DataFrame):
+            preferred = (
+                "text", "content", "document", "body",
+                "message", "response", "prompt",
+            )
+
+            dtypes = obj.dtypes  # Series of column-name -> dtype, no __getitem__ trigger
+            string_col_names = [
+                name for name, dt in dtypes.items()
+                if dt == object or pd.api.types.is_string_dtype(dt)
+            ]
+
+            target_col = None
+            for pref in preferred:
+                for c in string_col_names:
+                    if str(c).lower() == pref:
+                        target_col = c
+                        break
+                if target_col is not None:
+                    break
+            if target_col is None and string_col_names:
+                target_col = string_col_names[0]
+
+            if target_col is not None:
+                sample = [
+                    s for s in obj[target_col].head(5).tolist()
+                    if isinstance(s, str)
+                ]
+                if sample:
+                    return "\n".join(sample)
+    except ImportError:
+        pass
+    except Exception:  # noqa: BLE001
+        pass
+
+    return ""
+
+
 def _make_mirror_callback(al_tracker):
     """Build a post-record callback that mirrors each AutoLineage record
     as a TraceNode + parent DIRECT edges in RudriQ's DuckDB.
@@ -133,6 +225,30 @@ def _make_mirror_callback(al_tracker):
             duration_ms = getattr(record, "duration_ms", None)
             if duration_ms is not None:
                 metadata.setdefault("autolineage.duration_ms", duration_ms)
+
+            # Resolve the underlying Python object early so we can both
+            # extract a content preview (added to metadata before save)
+            # AND register object identity after save. AL's _lid_to_obj
+            # is a WeakValueDictionary, so the object may be gone if
+            # it's already been garbage-collected.
+            obj = None
+            try:
+                lid_to_obj = getattr(al_tracker, "_lid_to_obj", None)
+                if lid_to_obj is not None:
+                    obj = lid_to_obj.get(child_id)
+            except Exception:  # noqa: BLE001
+                obj = None
+
+            # Content preview, only when capture is explicitly enabled.
+            from rudriq.core.config import (
+                content_capture_enabled,
+                truncate_preview,
+            )
+
+            if content_capture_enabled() and obj is not None:
+                preview = _extract_obj_preview(obj)
+                if preview:
+                    metadata["rudriq.content_preview"] = truncate_preview(preview)
 
             started_at = _autolineage_record_to_started_at(record)
             if duration_ms:
@@ -171,21 +287,17 @@ def _make_mirror_callback(al_tracker):
                     run_id=run_id,
                 )
 
-            # ALSO register object identity for the record's child if we
-            # can resolve it to a live Python object via AL's _lid_to_obj
-            # weak-value dict. Many AL hooks call record() WITHOUT firing
-            # assign_id for the result (sort_values, drop_duplicates,
-            # head, reset_index, ...) — without this lookup, those
-            # outputs never enter rudriq's _object_registry and the
-            # downstream linker's identity match silently fails.
-            try:
-                lid_to_obj = getattr(al_tracker, "_lid_to_obj", None)
-                if lid_to_obj is not None:
-                    obj = lid_to_obj.get(child_id)
-                    if obj is not None:
-                        register_object_identity(obj, child_id)
-            except Exception:  # noqa: BLE001
-                pass
+            # ALSO register object identity for the record's child. Many
+            # AL hooks call record() WITHOUT firing assign_id for the
+            # result (sort_values, drop_duplicates, head, reset_index,
+            # ...) — without this, those outputs never enter rudriq's
+            # _object_registry and the downstream linker's identity
+            # match silently fails.
+            if obj is not None:
+                try:
+                    register_object_identity(obj, child_id)
+                except Exception:  # noqa: BLE001
+                    pass
         except Exception as exc:  # noqa: BLE001
             _LOG.debug(
                 "RudriQ mirror callback failed for record %s: %s",
@@ -252,6 +364,19 @@ def _make_assign_id_stub_callback(al_tracker):
                 v = al_node.get(key)
                 if v is not None:
                     metadata[f"autolineage.{key}"] = v
+
+            # Content preview, only when capture is explicitly enabled.
+            # ``obj`` is right here (parameter), so unlike the mirror
+            # callback we don't need a _lid_to_obj lookup.
+            from rudriq.core.config import (
+                content_capture_enabled,
+                truncate_preview,
+            )
+
+            if content_capture_enabled():
+                preview = _extract_obj_preview(obj)
+                if preview:
+                    metadata["rudriq.content_preview"] = truncate_preview(preview)
 
             # Try to extract a clean operation name from the source.
             # "pandas.read_csv" → operation="read_csv"; otherwise pass
@@ -370,6 +495,25 @@ def _activate_autolineage() -> bool:
 def _activate_traceloop() -> bool:
     """Initialize Traceloop (OpenLLMetry) if available. Returns True iff activated."""
     try:
+        # If the operator enabled RudriQ content capture, propagate to
+        # OpenLLMetry BEFORE Traceloop.init() reads its env. We never
+        # silently enable content capture in a downstream library —
+        # only when RudriQ's flag is on. setdefault preserves an
+        # explicit user override.
+        from rudriq.core.config import content_capture_enabled
+
+        if content_capture_enabled():
+            os.environ.setdefault("TRACELOOP_TRACE_CONTENT", "true")
+            # Newer OTel GenAI semconv env var; set both for compatibility
+            # across openllmetry-openai versions.
+            os.environ.setdefault(
+                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "true"
+            )
+            _LOG.info(
+                "RudriQ: content capture enabled — OpenLLMetry will record "
+                "prompt/completion. Previews truncated per RUDRIQ_PREVIEW_CHARS."
+            )
+
         from traceloop.sdk import Traceloop
 
         # Note: rudriq.processors.auto_capture.install_all() has already
