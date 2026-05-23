@@ -28,11 +28,43 @@ def _cmd_diagnose(args: argparse.Namespace) -> int:
 
 
 def _cmd_audit(args: argparse.Namespace) -> int:
+    # Resolve --include-evals knobs before calling into the exporter so
+    # the same parsed values feed both JSON and Markdown paths.
+    eval_metrics: list[str] | None = None
+    baseline_graph = None
+    include_evals = getattr(args, "include_evals", False)
+    if include_evals:
+        raw_metrics = getattr(args, "eval_metrics", None)
+        if raw_metrics:
+            eval_metrics = [
+                m.strip() for m in raw_metrics.split(",") if m.strip()
+            ]
+        baseline_run_id = getattr(args, "baseline_run_id", None)
+        if baseline_run_id:
+            from rudriq.storage import get_default_storage
+            baseline_graph = get_default_storage().load_run(baseline_run_id)
+            if baseline_graph is None:
+                print(
+                    f"warning: baseline run {baseline_run_id} not found; "
+                    f"drift (if requested) will SKIP.",
+                    file=sys.stderr,
+                )
+
     try:
         if args.format == "json":
-            content = export_audit_json(args.run_id)
+            content = export_audit_json(
+                args.run_id,
+                include_evals=include_evals,
+                eval_metrics=eval_metrics,
+                baseline_graph=baseline_graph,
+            )
         elif args.format == "markdown":
-            content = export_audit_markdown(args.run_id)
+            content = export_audit_markdown(
+                args.run_id,
+                include_evals=include_evals,
+                eval_metrics=eval_metrics,
+                baseline_graph=baseline_graph,
+            )
         elif args.format == "pdf":
             print(
                 "error: PDF rendering not yet supported. "
@@ -159,6 +191,30 @@ def main(argv: list[str] | None = None) -> int:
     p_audit.add_argument(
         "--output",
         help="Write to file instead of stdout",
+    )
+    p_audit.add_argument(
+        "--include-evals", action="store_true",
+        help=(
+            "Run quality evaluators and embed results in the audit "
+            "report. Default metrics: retrieval_relevance, groundedness, "
+            "coherence, consistency. Requires fastembed for real scores "
+            "(install rudriq[evaluate]); evaluators DEGRADE gracefully "
+            "if missing."
+        ),
+    )
+    p_audit.add_argument(
+        "--eval-metrics", default=None,
+        help=(
+            "Comma-separated metrics for --include-evals. Pass 'drift' "
+            "together with --baseline-run-id to include cross-run drift."
+        ),
+    )
+    p_audit.add_argument(
+        "--baseline-run-id", default=None,
+        help=(
+            "Baseline run for drift, if 'drift' is in --eval-metrics. "
+            "Ignored when --include-evals is not set."
+        ),
     )
     p_audit.set_defaults(func=_cmd_audit)
 

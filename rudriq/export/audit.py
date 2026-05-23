@@ -32,7 +32,26 @@ from rudriq.core.schema import (
 )
 from rudriq.storage import get_default_storage
 
-AUDIT_SCHEMA_VERSION = "rudriq.audit/1.0"
+AUDIT_SCHEMA_VERSION = "rudriq.audit/1.1"
+# 1.0 → 1.1 (Day 16, additive): two new top-level keys, ``evaluations``
+# (list[dict] of EvalResult.to_dict()) and ``evaluation_summary``
+# (per-metric traffic-light dict). Both are ``null`` when the writer
+# was not asked to include them. A 1.0 consumer can ignore the new
+# keys without breakage; the version always honestly reflects what
+# the writer is capable of emitting.
+
+# Default metrics for --include-evals. Drift is omitted by default
+# because it needs a baseline graph; the caller can request it
+# explicitly via eval_metrics + baseline_graph.
+_DEFAULT_AUDIT_EVAL_METRICS = (
+    "retrieval_relevance", "groundedness", "coherence", "consistency",
+)
+
+# Traffic-light bands for the evaluation summary. Green = healthy,
+# yellow = borderline, red = concerning, gray = no scoreable result
+# (all SKIPPED or DEGRADED).
+_TRAFFIC_GREEN_MIN = 0.7
+_TRAFFIC_YELLOW_MIN = 0.4
 
 
 # ---------------------------------------------------------------------------
@@ -248,11 +267,127 @@ def _compute_lineage_chains(graph: TraceGraph) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# Evaluation embedding (Day 16)
+# ---------------------------------------------------------------------------
+
+
+def _run_audit_evaluations(
+    graph: TraceGraph,
+    metrics: list[str] | tuple[str, ...] | None = None,
+    baseline_graph: TraceGraph | None = None,
+) -> list[dict[str, Any]]:
+    """Run evaluators for inclusion in an audit report.
+
+    Returns a deterministically-ordered list of ``EvalResult.to_dict()``
+    dicts (sorted by ``(metric, node_id-or-empty-string)``). The default
+    metric set is the four content-aware single-trace evaluators; drift
+    is only added when explicitly requested AND a baseline graph is
+    provided (its constructor needs the graph; the framework's
+    ``evaluate(graph)`` signature can't carry the baseline).
+
+    Unknown metric names are silently skipped — callers can pass a
+    user-supplied list without sanitization.
+    """
+    if metrics is None:
+        metrics = _DEFAULT_AUDIT_EVAL_METRICS
+
+    from rudriq.evaluate.base import run_evaluators
+    from rudriq.evaluate.coherence import CoherenceEvaluator
+    from rudriq.evaluate.consistency import ConsistencyEvaluator
+    from rudriq.evaluate.groundedness import GroundednessEvaluator
+    from rudriq.evaluate.retrieval_relevance import RetrievalRelevanceEvaluator
+
+    registry = {
+        "retrieval_relevance": RetrievalRelevanceEvaluator,
+        "groundedness": GroundednessEvaluator,
+        "coherence": CoherenceEvaluator,
+        "consistency": ConsistencyEvaluator,
+    }
+    evaluators: list[Any] = [registry[m]() for m in metrics if m in registry]
+
+    if "drift" in metrics and baseline_graph is not None:
+        from rudriq.evaluate.drift import DriftEvaluator
+        evaluators.append(DriftEvaluator(baseline_graph=baseline_graph))
+
+    results = run_evaluators(graph, evaluators)
+    result_dicts = [r.to_dict() for r in results]
+    # Deterministic ordering: metric first, then node_id (empty-string
+    # for trace-level results). The audit JSON's outer ``sort_keys``
+    # handles dict-key ordering; this handles list ordering.
+    result_dicts.sort(key=lambda d: (d["metric"], d.get("node_id") or ""))
+    return result_dicts
+
+
+def _summarize_evaluations(
+    eval_dicts: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Build a per-metric traffic-light summary across eval results.
+
+    For each metric, aggregates how many OK / SKIPPED / DEGRADED / ERROR
+    results landed, and the mean score among OK results. Assigns a
+    traffic-light status per metric from the mean score:
+
+    * ``green``  — mean ≥ 0.7
+    * ``yellow`` — mean ≥ 0.4
+    * ``red``    — mean < 0.4
+    * ``gray``   — no OK results with a score
+
+    Returns a dict keyed by metric, deterministically ordered (Python
+    dicts preserve insertion; we insert in sorted metric order).
+    """
+    from collections import defaultdict
+
+    by_metric: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for d in eval_dicts:
+        by_metric[d["metric"]].append(d)
+
+    summary: dict[str, dict[str, Any]] = {}
+    for metric in sorted(by_metric):
+        items = by_metric[metric]
+        ok_scored = [
+            i for i in items
+            if i["status"] == "ok" and i.get("score") is not None
+        ]
+        status_counts: dict[str, int] = {}
+        for i in items:
+            status_counts[i["status"]] = status_counts.get(i["status"], 0) + 1
+
+        mean_score: float | None = (
+            sum(i["score"] for i in ok_scored) / len(ok_scored)
+            if ok_scored else None
+        )
+
+        if mean_score is None:
+            light = "gray"
+        elif mean_score >= _TRAFFIC_GREEN_MIN:
+            light = "green"
+        elif mean_score >= _TRAFFIC_YELLOW_MIN:
+            light = "yellow"
+        else:
+            light = "red"
+
+        summary[metric] = {
+            "mean_score": mean_score,
+            "traffic_light": light,
+            "status_counts": status_counts,
+            "evaluated": len(ok_scored),
+            "total": len(items),
+        }
+    return summary
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
 
-def export_audit_json(run_id: str) -> str:
+def export_audit_json(
+    run_id: str,
+    *,
+    include_evals: bool = False,
+    eval_metrics: list[str] | None = None,
+    baseline_graph: TraceGraph | None = None,
+) -> str:
     """
     Export the run's audit report as a JSON string.
 
@@ -261,6 +396,21 @@ def export_audit_json(run_id: str) -> str:
     child_id, kind). The same TraceGraph produces byte-identical output
     across calls, processes, and DuckDB instances (apart from the
     ``generated_at`` timestamp at the top level).
+
+    Parameters
+    ----------
+    include_evals:
+        If True, runs the configured evaluators against ``graph`` and
+        embeds their output as ``evaluations`` + ``evaluation_summary``.
+        Default ``False`` — capture-content + fastembed are opt-in
+        dependencies; the audit report stays cheap by default.
+    eval_metrics:
+        Optional list of metric names. Defaults to the four content-
+        aware single-trace evaluators. Pass ``["drift", ...]`` together
+        with ``baseline_graph`` to include drift.
+    baseline_graph:
+        Required iff ``"drift"`` is in ``eval_metrics``. Loaded by the
+        CLI from ``--baseline-run-id``.
 
     Raises ValueError if run_id is not in storage.
     """
@@ -274,6 +424,12 @@ def export_audit_json(run_id: str) -> str:
 
     nodes_sorted = _sorted_nodes(graph)
     edges_sorted = _sorted_edges(graph)
+
+    evaluations: list[dict[str, Any]] | None = None
+    evaluation_summary: dict[str, dict[str, Any]] | None = None
+    if include_evals:
+        evaluations = _run_audit_evaluations(graph, eval_metrics, baseline_graph)
+        evaluation_summary = _summarize_evaluations(evaluations)
 
     report = {
         "schema_version": AUDIT_SCHEMA_VERSION,
@@ -289,6 +445,10 @@ def export_audit_json(run_id: str) -> str:
             "edges": [e.to_dict() for e in edges_sorted],
         },
         "lineage_chains": chains,
+        # 1.1 additions — always present, ``null`` when not requested,
+        # so the schema version honestly describes the writer.
+        "evaluations": evaluations,
+        "evaluation_summary": evaluation_summary,
     }
 
     return json.dumps(report, indent=2, sort_keys=True, default=str)
@@ -304,7 +464,75 @@ def _now_utc_iso() -> str:
 # ---------------------------------------------------------------------------
 
 
-def export_audit_markdown(run_id: str) -> str:
+def _render_eval_markdown(
+    eval_dicts: list[dict[str, Any]],
+    eval_summary: dict[str, dict[str, Any]],
+) -> list[str]:
+    """Render the ``## Quality Evaluation`` Markdown section.
+
+    Layout: a per-metric traffic-light summary table, then a
+    "Notable findings" list of non-OK or sub-green results (capped to
+    keep the report readable). Emoji traffic lights are a deliberate
+    style exception — a colored circle is genuinely clearer than
+    ``[GREEN]`` for a human reading a compliance artifact.
+    """
+    lights = {"green": "🟢", "yellow": "🟡", "red": "🔴", "gray": "⚪"}
+    lines: list[str] = ["", "## Quality Evaluation", ""]
+
+    if not eval_summary:
+        lines.append(
+            "_No evaluation results — evaluators all SKIPPED or fastembed "
+            "is not installed._"
+        )
+        return lines
+
+    lines.append("| Metric | Status | Mean Score | Evaluated |")
+    lines.append("|---|---|---|---|")
+    for metric in sorted(eval_summary):
+        s = eval_summary[metric]
+        light = lights.get(s["traffic_light"], "⚪")
+        score = (
+            f"{s['mean_score']:.2f}"
+            if s["mean_score"] is not None else "N/A"
+        )
+        lines.append(
+            f"| {metric} | {light} {s['traffic_light']} | "
+            f"{score} | {s['evaluated']}/{s['total']} |"
+        )
+
+    notable = [
+        d for d in eval_dicts
+        if d["status"] != "ok"
+        or (d.get("score") is not None and d["score"] < _TRAFFIC_GREEN_MIN)
+    ]
+    if notable:
+        lines.extend(["", "### Notable findings", ""])
+        for d in notable[:20]:
+            node = f" (node `{d['node_id']}`)" if d.get("node_id") else ""
+            score = (
+                f"{d['score']:.2f}"
+                if d.get("score") is not None else "—"
+            )
+            lines.append(
+                f"- **{d['metric']}** [{d['status']}] {score}{node}: "
+                f"{d['explanation']}"
+            )
+        if len(notable) > 20:
+            lines.append(
+                f"- _(+{len(notable) - 20} more notable findings omitted "
+                f"for brevity; see the JSON export for the full list.)_"
+            )
+
+    return lines
+
+
+def export_audit_markdown(
+    run_id: str,
+    *,
+    include_evals: bool = False,
+    eval_metrics: list[str] | None = None,
+    baseline_graph: TraceGraph | None = None,
+) -> str:
     """
     Export the run's audit report as Markdown.
 
@@ -312,6 +540,14 @@ def export_audit_markdown(run_id: str) -> str:
     auditor, ML platform engineer reviewing a failure). Sections are
     ordered from highest-level (summary) to most-detailed (full graph
     appendix).
+
+    Parameters
+    ----------
+    include_evals:
+        If True, runs the configured evaluators and inserts a
+        ``## Quality Evaluation`` section between the LLM lineage
+        chains and the full-operations appendix. See
+        :func:`export_audit_json` for the parameter semantics.
     """
     storage = get_default_storage()
     graph = storage.load_run(run_id)
@@ -323,6 +559,12 @@ def export_audit_markdown(run_id: str) -> str:
 
     nodes_sorted = _sorted_nodes(graph)
     edges_sorted = _sorted_edges(graph)
+
+    evaluations: list[dict[str, Any]] | None = None
+    evaluation_summary: dict[str, dict[str, Any]] | None = None
+    if include_evals:
+        evaluations = _run_audit_evaluations(graph, eval_metrics, baseline_graph)
+        evaluation_summary = _summarize_evaluations(evaluations)
 
     lines: list[str] = []
 
@@ -388,6 +630,14 @@ def export_audit_markdown(run_id: str) -> str:
             else:
                 lines.append("_No upstream operations linked to this LLM call._")
             lines.append("")
+
+    # Quality Evaluation (1.1, optional). Placed between the LLM
+    # lineage chains and the full-operations appendix so a reader who
+    # already cares about the linked LLM calls sees their quality
+    # signal next, before the dense appendix.
+    if include_evals and evaluations is not None and evaluation_summary is not None:
+        lines.extend(_render_eval_markdown(evaluations, evaluation_summary))
+        lines.append("")
 
     # Full Operations Appendix
     lines.append("## Full Operations Appendix")

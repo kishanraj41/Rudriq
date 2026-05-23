@@ -10,10 +10,10 @@ _(All Critical-priority items resolved as of Day 11. Remaining work is Important
 
 ### Important but deferable
 
-#### Evaluation engine — audit report integration
-**Status:** Open
+#### Evaluation engine — consistency grouping picks up retrieval context
+**Status:** Open (Day 15 validation finding)
 
-The 5 evaluators ship CLI-only (`rudriq evaluate --run-id ...`). Audit reports (`rudriq audit`) don't yet include eval results inline. Next step: a `--include-evals` flag on `rudriq audit` that runs the requested evaluators and embeds their output in the JSON/Markdown export, with a configurable threshold-based traffic-light summary.
+`ConsistencyEvaluator` groups LLM calls by prompt cosine similarity (default 0.85). In the realistic pipeline, all 20 distinct user queries collapsed into one group because `rudriq.prompt_preview` is the *assembled* prompt (user message + prepended retrieved docs), and the shared retrieval dominates the embedding. Fix options: (a) capture the user message separately as `rudriq.user_message_preview` (smallest change to current data shape); (b) raise the default `group_threshold` to 0.95; (c) embed only the last N chars of the prompt (the user message typically lands there). (a) is the most defensible since it preserves the assembled prompt for other evaluators that legitimately want the full input.
 
 #### Concurrency-safe input stash
 **Status:** Resolved (Day 12 Phase C, v0.0.9.dev1)
@@ -54,6 +54,30 @@ The CLI accepts `--format pdf` and prints a friendly error pointing at pandoc. R
 `generate_audit_report(template="custom-internal")` raises NotImplementedError. Real templates would let a customer supply their own Jinja2 template that maps the trace graph onto their internal compliance format. Deferred to v0.3.
 
 ## Resolved
+
+### Day 16 — Eval results in the audit report (`--include-evals`) ✅
+**Resolved:** May 23, 2026 (Day 16, v0.1.0.dev3)
+
+Eval scores now appear in the artifact a compliance officer reads, not just in CLI output. `rudriq audit --run-id X --include-evals` embeds evaluation results into both JSON and Markdown audits.
+
+**Schema bumped `rudriq.audit/1.0` → `1.1`** (additive). Two new top-level keys: `evaluations` (deterministically-ordered list of `EvalResult.to_dict()`) and `evaluation_summary` (per-metric traffic-light dict). Both are `null` when `--include-evals` is not passed, so the version string honestly describes the writer's capability. 1.0 consumers ignore the new keys without breakage.
+
+**Determinism preserved** (Day 6 discipline). Eval list sorted by `(metric, node_id-or-empty-string)`; outer JSON uses `sort_keys=True`. Verified byte-identical across two consecutive eval-augmented exports of the realistic-pipeline run with real fastembed (119 782 bytes, identical apart from the documented `generated_at`).
+
+**Traffic-light bands** (configurable via module constants):
+
+* `green`  — mean score ≥ 0.7
+* `yellow` — mean score ≥ 0.4
+* `red`    — mean score < 0.4
+* `gray`   — no scoreable OK results
+
+Markdown renders the summary as a table (emoji circles — a deliberate style exception for a human-read artifact) plus a `### Notable findings` list of non-OK or sub-green results, capped at 20 entries with a "see JSON for the full list" footer.
+
+**CLI:** `--include-evals`, `--eval-metrics`, `--baseline-run-id` added to the audit subcommand. The default metric set is the four single-trace content-aware evaluators (drift omitted unless explicitly requested + baseline provided).
+
+8 new tests in `tests/test_audit_with_evals.py`, including the load-bearing byte-determinism guard (with `_now_utc_iso` monkeypatched), the traffic-light banding unit test, list-ordering stability, and a notable-findings Markdown surface test. 182 total tests passing.
+
+Live audit on the realistic pipeline run: 🟢 retrieval_relevance 0.94 (22/23), 🟢 groundedness 1.00 (20/23), 🟢 coherence 0.76 (20/23), 🟢 consistency 1.00 (1/1, reflects the known grouping artifact). The SKIPs land in `### Notable findings` with their exact `node_id`s, which is what an auditor needs to drill in.
 
 ### Day 15 — Three more evaluators: coherence, consistency, drift ✅
 **Resolved:** May 23, 2026 (Day 15, v0.1.0.dev2 unpushed)
