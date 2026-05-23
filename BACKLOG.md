@@ -10,17 +10,10 @@ _(All Critical-priority items resolved as of Day 11. Remaining work is Important
 
 ### Important but deferable
 
-#### Evaluation engine — drift + consistency evaluators
-**Status:** Open — design discussion pending (Day 15 Phase 2)
+#### Evaluation engine — audit report integration
+**Status:** Open
 
-Day 13 shipped the framework + retrieval_relevance + groundedness. Day 14 added content-preview enrichment so they produce real scores. Day 15 Phase 1 added **coherence** (3rd evaluator).
-
-Drift and consistency are still open because each needs a conceptual decision about the comparison data, not just a class:
-
-* **Consistency** — "same prompt → same response across runs?" Single-run traces have no replay. Needs either (a) a multi-run query layer (cluster spans by prompt hash across stored runs in DuckDB, score response similarity), or (b) explicit replay support where the user re-runs a query and we correlate.
-* **Drift** — "is response distribution changing over time?" Needs a baseline definition. Options: (a) operator-supplied baseline run_id pinned at "this is normal"; (b) rolling window of the last N runs as auto-baseline; (c) per-prompt drift (compare today's response for a given prompt to its earlier version).
-
-Coherence was implementable in one session because it's a single-trace, single-call metric — the comparison data is already in the same node. Drift and consistency are cross-run metrics; the framework's `evaluate(graph) → list[EvalResult]` signature assumes a single graph. Either we widen the interface or we read additional runs from storage inside the evaluator.
+The 5 evaluators ship CLI-only (`rudriq evaluate --run-id ...`). Audit reports (`rudriq audit`) don't yet include eval results inline. Next step: a `--include-evals` flag on `rudriq audit` that runs the requested evaluators and embeds their output in the JSON/Markdown export, with a configurable threshold-based traffic-light summary.
 
 #### Concurrency-safe input stash
 **Status:** Resolved (Day 12 Phase C, v0.0.9.dev1)
@@ -61,6 +54,36 @@ The CLI accepts `--format pdf` and prints a friendly error pointing at pandoc. R
 `generate_audit_report(template="custom-internal")` raises NotImplementedError. Real templates would let a customer supply their own Jinja2 template that maps the trace graph onto their internal compliance format. Deferred to v0.3.
 
 ## Resolved
+
+### Day 15 — Three more evaluators: coherence, consistency, drift ✅
+**Resolved:** May 23, 2026 (Day 15, v0.1.0.dev2 unpushed)
+
+Completes the 5-evaluator set planned for v0.1.0.
+
+**Coherence (`rudriq.evaluate.coherence`)** — within-node holistic response-vs-context cosine similarity. Distinct from groundedness: groundedness asks "are individual claims supported?", coherence asks "does the response USE the context?". The two disagree productively — high groundedness + low coherence is the retrieval-decorative anti-pattern (model answered from parametric knowledge; claims happen to pattern-match retrieval). Single-call metric, no extra infrastructure. Shipped Phase 1 commit `39ae83b` (pushed).
+
+**Consistency (`rudriq.evaluate.consistency`)** — within-run. Greedy-clusters LLM calls by prompt similarity (default threshold 0.85), scores mean pairwise response similarity within each group of size ≥ 2. Singletons SKIP. Honest about its applicability: runs of all-distinct prompts SKIP wholesale; fires on agentic loops, retries, batch-similar workloads.
+
+**Drift (`rudriq.evaluate.drift`)** — cross-run, requires `--baseline-run-id`. Two signals:
+* `drift_structural` — Counter of `library.operation` strings, normalized L1 distance between baseline and current distributions.
+* `drift_response` — aligns LLM calls across runs by prompt-cosine ≥ 0.85, measures mean response drift on the aligned pairs. Unaligned current-run calls are surfaced as "new behavior."
+
+Drift is the only evaluator that takes a constructor argument (the baseline graph), so it's special-cased in `_cmd_evaluate` rather than living in `_EVALUATOR_REGISTRY`. The CLI loads the baseline run and injects it; absence falls through to a SKIPPED result with a "drift is cross-run by nature" message.
+
+**Validation against `examples/realistic_rag_pipeline.py` (two runs, capture on):**
+
+| metric              | results | OK | SKIP | mean score |
+|---------------------|--------:|---:|-----:|-----------:|
+| retrieval_relevance |   23    | 18 | 5    | 0.94       |
+| groundedness        |   23    | 18 | 5    | 1.00       |
+| coherence           |   23    | 18 | 5    | 0.76       |
+| consistency         |    1    |  1 | 0    | 1.00       |
+| drift_structural    |    1    |  1 | 0    | 1.00       |
+| drift_response      |    1    |  1 | 0    | 1.00       |
+
+Consistency grouped all 20 chat calls because their prompt previews are dominated by shared retrieved-doc content (the prompts embed roughly the same context); responses are byte-identical from the mock so similarity = 1.0. Drift correctly reports ~0 for two identical pipeline runs — sanity check pass. The 5 SKIPs across the content-aware evaluators are consistent across all three (same nodes), suggesting a structural property of the pipeline worth a brief Day 16 look (probably the embedding spans without paired completion_preview).
+
+16 new tests total across the three evaluators; 174 passing. v0.1.0 final once `--include-evals` lands in audit reports.
 
 ### Day 14 — Opt-in content-preview capture for evaluation ✅
 **Resolved:** May 23, 2026 (Day 14, v0.1.0.dev1)

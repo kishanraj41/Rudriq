@@ -60,6 +60,9 @@ _EVALUATOR_REGISTRY = {
     "retrieval_relevance": "rudriq.evaluate.retrieval_relevance:RetrievalRelevanceEvaluator",
     "groundedness": "rudriq.evaluate.groundedness:GroundednessEvaluator",
     "coherence": "rudriq.evaluate.coherence:CoherenceEvaluator",
+    "consistency": "rudriq.evaluate.consistency:ConsistencyEvaluator",
+    # ``drift`` is special-cased in _cmd_evaluate because it takes a
+    # constructor argument (baseline graph); not listed here.
 }
 
 
@@ -68,26 +71,49 @@ def _cmd_evaluate(args: argparse.Namespace) -> int:
     from rudriq.storage import get_default_storage
 
     requested = [m.strip() for m in args.metrics.split(",") if m.strip()]
-    unknown = [m for m in requested if m not in _EVALUATOR_REGISTRY]
+
+    # ``drift`` isn't in _EVALUATOR_REGISTRY because it takes a baseline
+    # graph in its constructor. It's accepted here as a known special.
+    known = set(_EVALUATOR_REGISTRY) | {"drift"}
+    unknown = [m for m in requested if m not in known]
     if unknown:
         print(
             f"error: unknown metric(s): {', '.join(unknown)}. "
-            f"Available: {', '.join(_EVALUATOR_REGISTRY)}",
+            f"Available: {', '.join(sorted(known))}",
             file=sys.stderr,
         )
         return 2
 
-    evaluators = []
-    for m in requested:
-        module_path, _, cls_name = _EVALUATOR_REGISTRY[m].partition(":")
-        import importlib
-        module = importlib.import_module(module_path)
-        evaluators.append(getattr(module, cls_name)())
-
-    graph = get_default_storage().load_run(args.run_id)
+    storage = get_default_storage()
+    graph = storage.load_run(args.run_id)
     if graph is None:
         print(f"error: no run found with id {args.run_id}", file=sys.stderr)
         return 1
+
+    evaluators = []
+    for m in requested:
+        if m == "drift":
+            # Drift is the only evaluator that takes a constructor arg —
+            # it needs a baseline graph injected. If no baseline run-id
+            # was given (or the baseline doesn't load), the evaluator
+            # itself emits SKIPPED.
+            from rudriq.evaluate.drift import DriftEvaluator
+
+            baseline = None
+            if args.baseline_run_id:
+                baseline = storage.load_run(args.baseline_run_id)
+                if baseline is None:
+                    print(
+                        f"warning: baseline run {args.baseline_run_id} not "
+                        f"found; drift will SKIP.",
+                        file=sys.stderr,
+                    )
+            evaluators.append(DriftEvaluator(baseline_graph=baseline))
+        else:
+            module_path, _, cls_name = _EVALUATOR_REGISTRY[m].partition(":")
+            import importlib
+            module = importlib.import_module(module_path)
+            evaluators.append(getattr(module, cls_name)())
 
     results = run_evaluators(graph, evaluators)
 
@@ -147,7 +173,14 @@ def main(argv: list[str] | None = None) -> int:
         "--metrics", default="retrieval_relevance,groundedness",
         help=(
             "Comma-separated list of metrics to run. Available: "
-            + ", ".join(_EVALUATOR_REGISTRY)
+            + ", ".join(sorted(set(_EVALUATOR_REGISTRY) | {"drift"}))
+        ),
+    )
+    p_eval.add_argument(
+        "--baseline-run-id", default=None,
+        help=(
+            "Baseline run to compare against (required for the 'drift' "
+            "metric; ignored by others)."
         ),
     )
     p_eval.add_argument(
