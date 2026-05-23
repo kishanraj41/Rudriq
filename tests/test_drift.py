@@ -130,6 +130,63 @@ def test_high_response_drift_flagged(monkeypatch):
     assert "mean response drift" in resp[0].explanation
 
 
+def test_drift_detects_response_change_end_to_end(monkeypatch):
+    """Day 17 Thread D pin: drift evaluator actually DETECTS change.
+
+    The Day 15 sanity test only proved 'identical-runs returns 1.0'
+    (no false positive). This test proves the *other* direction: same
+    prompts, materially different responses → score drops well below
+    1.0. The validation script ``examples/drift_validation.py`` runs
+    this same shape end-to-end; the test pins it against future
+    regressions so we can't accidentally break detection capability.
+
+    Uses a hash-based deterministic embedding so identical prompts
+    align cleanly and different responses are uncorrelated.
+    """
+    import hashlib
+
+    def deterministic_embed(texts):
+        out = []
+        for t in texts:
+            d = hashlib.sha256(t.encode("utf-8")).digest()
+            out.append([(d[i] - 128) / 128.0 for i in range(16)])
+        return out
+
+    monkeypatch.setattr(
+        "rudriq.evaluate.drift.embed_texts", deterministic_embed
+    )
+
+    questions = ["q1", "q2", "q3"]
+    baseline_answers = ["a1 original", "a2 original", "a3 original"]
+    perturbed_answers = [
+        "REVISED: completely different topic",
+        "REVISED: another unrelated answer",
+        "REVISED: third orthogonal response",
+    ]
+
+    base = datetime(2026, 5, 23, tzinfo=timezone.utc)
+    baseline = TraceGraph(run_id="base", created_at=base, metadata={})
+    perturbed = TraceGraph(run_id="cur", created_at=base, metadata={})
+    for i, q in enumerate(questions):
+        baseline.add_node(_llm(f"b{i}", q, baseline_answers[i]))
+        perturbed.add_node(_llm(f"c{i}", q, perturbed_answers[i]))
+
+    results = DriftEvaluator(baseline_graph=baseline).evaluate(perturbed)
+    resp = next(r for r in results if r.metric == "drift_response")
+
+    # Detection: identical prompts align, different responses register
+    # as drift.
+    assert resp.status == EvalStatus.OK
+    assert resp.score < 0.8, (
+        f"perturbation should produce score < 0.8; got {resp.score:.3f}"
+    )
+    assert resp.details["aligned_pairs"] == 3
+    assert resp.details["mean_drift"] > 0.2, (
+        f"perturbed responses should show meaningful drift; "
+        f"got mean_drift={resp.details['mean_drift']:.3f}"
+    )
+
+
 def test_degrades_without_fastembed(monkeypatch):
     monkeypatch.setattr("rudriq.evaluate.drift.embed_texts", lambda t: None)
     baseline = _graph([_llm("b1", "q", "a")], "base")

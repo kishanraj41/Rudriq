@@ -59,6 +59,21 @@ The CLI accepts `--format pdf` and prints a friendly error pointing at pandoc. R
 
 ## Resolved
 
+### Day 17 — Audit hardening, consistency fix, RCA, drift validation ✅
+**Resolved:** May 23, 2026 (Day 17 Threads A–D, v0.1.0.dev4 → dev7)
+
+Four threads shipped in sequence; each independently pushed:
+
+**Thread A (`d7c8c5c`, v0.1.0.dev4) — True byte-determinism + not-applicable SKIP suppression.** Removed `generated_at` from the audit report body so two consecutive exports of the same run produce byte-identical output, no exclusions (verified live on the realistic pipeline: 124 771 bytes identical). Categorized the 5 SKIPs from Day 16: 6 of 8 were spec-correct embedding spans (no response text exists for an embedding by definition); marked as `details.not_applicable=True` and suppressed from the audit Markdown's Notable findings. Summary table now reads "Evaluated 20/20 (3 not applicable)" honestly rather than "20/23" mixed with real gaps.
+
+**Thread B (`ce6e5fd`, v0.1.0.dev5) — Consistency reads user-role message.** Added `_parse_genai_messages` to the OTel adapter to extract role-tagged content from `gen_ai.input.messages`; persists `rudriq.user_message_preview` distinct from the full `rudriq.prompt_preview`. ConsistencyEvaluator prefers the user message for grouping. Structurally correct for "retrieval-in-system" pipelines. Honest residual: pipelines that put retrieval text INSIDE the user-role turn (the realistic demo's pattern) still see grouping collapse; documented as a prompt-assembly choice, not a metric bug.
+
+**Thread C (`886635a`, v0.1.0.dev6) — Deviation-weighted RCA.** New `rudriq.analyzer.deviation_rca` module with `DeviationRCA.analyze(graph, target_node_id)` returning ranked suspects. BFS upstream along LINEAGE_LINK + DIRECT edges, scoring by structural deviation (vs baseline shape), proximity, and cumulative path link-confidence. Honest framing throughout: heuristic suspect ranking, NOT a causal proof — full causal inference is v1.0+ research. CLI: `rudriq diagnose --run-id X --target NODE [--baseline-run-id Y]`. Legacy v0.0.1 `diagnose` stub preserved for backward compatibility. Live validation surfaced two real bugs the unit tests had missed: self-loop edges from `autolineage.select` records (now skipped) and parallel duplicate edges (now deduped, keeping the highest-score traversal per node).
+
+**Thread D (v0.1.0.dev7) — Drift perturbation validation.** `examples/drift_validation.py` builds baseline + perturbed synthetic traces (same prompts, materially different responses), patches `embed_texts` with a hash-based deterministic stub, and prints the contrast: `identical drift_response = 1.000` vs `perturbed drift_response = 0.516` — a 0.484 drop on materially changed responses, with 1 unmatched call correctly flagged as "new behavior" and high-drift example prompts surfaced in the explanation. The exact two-number contrast a design partner asks for after seeing the Day 15 "1.0 on identical runs" sanity result. Pinned as a regression test in `tests/test_drift.py::test_drift_detects_response_change_end_to_end`.
+
+Test count: 182 (start of Day 17) → 213. All four threads shipped independently with their own commits + pushes.
+
 ### Day 16 — Eval results in the audit report (`--include-evals`) ✅
 **Resolved:** May 23, 2026 (Day 16, v0.1.0.dev3)
 
