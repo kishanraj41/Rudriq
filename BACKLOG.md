@@ -36,23 +36,6 @@ Two timezone bugs caught (Day 2 DuckDB roundtrip, Day 7 AutoLineage timestamp). 
 
 ### Operational
 
-#### PyPI publish of autolineage 0.6.x
-**Status:** Open
-**Target:** ~May 13 or later, after RudriQ has soaked the dependency for ~1 week
-
-autolineage v0.5.0, v0.6.0, v0.6.1 are tagged on github. RudriQ's `[lineage]` extra resolves them via `git+...@v0.6.1`. Asymmetric risk: a buggy public release on PyPI is permanent (PyPI doesn't allow version reuse). A week of RudriQ integration runs will surface any bugs before the public release.
-
-**To publish:**
-
-```powershell
-cd C:\Users\kisha\OneDrive\Documents\AI\autolineage
-git checkout v0.6.1
-python -m build
-twine upload dist/autolineage-0.6.1*
-```
-
-Then update RudriQ's `pyproject.toml` `[lineage]` extra to `"autolineage>=0.6.1,<0.7"` and remove the git URL.
-
 #### PDF export of audit reports
 **Status:** Stub raises NotImplementedError
 **Origin:** Day 5
@@ -66,6 +49,13 @@ The CLI accepts `--format pdf` and prints a friendly error pointing at pandoc. R
 `generate_audit_report(template="custom-internal")` raises NotImplementedError. Real templates would let a customer supply their own Jinja2 template that maps the trace graph onto their internal compliance format. Deferred to v0.3.
 
 ## Resolved
+
+### Day 12 Phase A — PyPI publish of autolineage 0.6.1 ✅
+**Resolved:** May 15, 2026 (Day 12 Phase A, v0.0.9)
+
+Built from the `v0.6.1` tag via a detached worktree (paper-related uncommitted changes on `v0.4.1-cleanup` were left intact). `twine check` PASSED for both wheel and sdist; TestPyPI dress rehearsal skipped since the token issued was real-PyPI scoped and `twine check` had already validated README rendering. Live at https://pypi.org/project/autolineage/0.6.1/.
+
+RudriQ's `[lineage]` and `[all]` extras updated from `autolineage @ git+...@v0.6.1` to `autolineage>=0.6.1,<0.7`. Customers now `pip install rudriq[lineage]` without needing git access. Smoke-checked: fresh install resolves 0.6.1 from PyPI, 137 tests pass, realistic pipeline regression still 23/43 linkage.
 
 ### Day 12 Phase C — Concurrency-safe input stash + peek-LRU by-span-id channel ✅
 **Resolved:** May 9, 2026 (Day 12 Phase C, v0.0.9.dev1)

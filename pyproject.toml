@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rudriq"
-version = "0.0.9.dev1"
+version = "0.0.9"
 description = "Connect LLM behavior to its upstream data lineage. Operation-level root-cause analysis across data pipelines and LLM calls."
 readme = "README.md"
 license = {text = "MIT"}
@@ -54,15 +54,15 @@ llm = [
 ]
 lineage = [
     # Auto-registration of object identity into the linker requires
-    # the register_assign_id_callback API added in autolineage 0.5.
-    # Pinned to the git tag for now; will switch to PyPI version
-    # ("autolineage>=0.5,<0.6") once 0.5.0 is published.
-    "autolineage @ git+https://github.com/kishanraj41/autolineage.git@v0.6.1",
+    # the register_assign_id_callback API added in autolineage 0.5,
+    # and the post_record callback added in 0.6. Published to PyPI as
+    # 0.6.1 on 2026-05-15; the git-URL pin below is retired.
+    "autolineage>=0.6.1,<0.7",
 ]
 all = [
     "traceloop-sdk>=0.30",
     "openai>=1.0,<2.0",
-    "autolineage @ git+https://github.com/kishanraj41/autolineage.git@v0.6.1",
+    "autolineage>=0.6.1,<0.7",
 ]
 dev = [
     "pytest>=7.0",
