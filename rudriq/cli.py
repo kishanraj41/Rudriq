@@ -91,17 +91,26 @@ def _cmd_diagnose_rca(args: argparse.Namespace) -> int:
 
 
 def _cmd_audit(args: argparse.Namespace) -> int:
-    # Resolve --include-evals knobs before calling into the exporter so
-    # the same parsed values feed both JSON and Markdown paths.
+    # Resolve --include-evals + --include-rca knobs before calling into
+    # the exporter so the same parsed values feed both JSON and Markdown
+    # paths.
     eval_metrics: list[str] | None = None
     baseline_graph = None
     include_evals = getattr(args, "include_evals", False)
+    include_rca = getattr(args, "include_rca", False)
+    rca_target = getattr(args, "rca_target", None)
+
     if include_evals:
         raw_metrics = getattr(args, "eval_metrics", None)
         if raw_metrics:
             eval_metrics = [
                 m.strip() for m in raw_metrics.split(",") if m.strip()
             ]
+
+    # The baseline run-id is shared by --include-evals (drift) and
+    # --include-rca (structural deviation). Load once if either flag
+    # is set, reuse for both.
+    if include_evals or include_rca:
         baseline_run_id = getattr(args, "baseline_run_id", None)
         if baseline_run_id:
             from rudriq.storage import get_default_storage
@@ -109,7 +118,7 @@ def _cmd_audit(args: argparse.Namespace) -> int:
             if baseline_graph is None:
                 print(
                     f"warning: baseline run {baseline_run_id} not found; "
-                    f"drift (if requested) will SKIP.",
+                    f"drift / RCA structural deviation will fall back.",
                     file=sys.stderr,
                 )
 
@@ -120,6 +129,8 @@ def _cmd_audit(args: argparse.Namespace) -> int:
                 include_evals=include_evals,
                 eval_metrics=eval_metrics,
                 baseline_graph=baseline_graph,
+                include_rca=include_rca,
+                rca_target=rca_target,
             )
         elif args.format == "markdown":
             content = export_audit_markdown(
@@ -127,6 +138,8 @@ def _cmd_audit(args: argparse.Namespace) -> int:
                 include_evals=include_evals,
                 eval_metrics=eval_metrics,
                 baseline_graph=baseline_graph,
+                include_rca=include_rca,
+                rca_target=rca_target,
             )
         elif args.format == "pdf":
             print(
@@ -313,8 +326,25 @@ def main(argv: list[str] | None = None) -> int:
     p_audit.add_argument(
         "--baseline-run-id", default=None,
         help=(
-            "Baseline run for drift, if 'drift' is in --eval-metrics. "
-            "Ignored when --include-evals is not set."
+            "Baseline run for drift (if 'drift' is in --eval-metrics) AND "
+            "for RCA structural-deviation scoring (if --include-rca). "
+            "Ignored when neither is in play."
+        ),
+    )
+    p_audit.add_argument(
+        "--include-rca", action="store_true",
+        help=(
+            "Embed deviation-weighted root-cause analysis into the audit "
+            "report. By default auto-targets the LLM call with the lowest "
+            "groundedness score so the user need not know node_ids. "
+            "Heuristic suspect ranking, NOT a causal proof."
+        ),
+    )
+    p_audit.add_argument(
+        "--rca-target", default=None,
+        help=(
+            "Specific node_id to diagnose for --include-rca. Default: "
+            "auto-select the worst LLM call by groundedness."
         ),
     )
     p_audit.set_defaults(func=_cmd_audit)

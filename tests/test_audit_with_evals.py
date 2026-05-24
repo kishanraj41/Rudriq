@@ -90,7 +90,7 @@ def _stub_embeddings_for_all(monkeypatch):
 def test_json_without_evals_has_null_evaluations(storage_with_run):
     out = export_audit_json("audit-eval-run", include_evals=False)
     report = json.loads(out)
-    assert report["schema_version"] == "rudriq.audit/1.1"
+    assert report["schema_version"] == "rudriq.audit/1.2"
     assert report["evaluations"] is None
     assert report["evaluation_summary"] is None
 

@@ -32,13 +32,18 @@ from rudriq.core.schema import (
 )
 from rudriq.storage import get_default_storage
 
-AUDIT_SCHEMA_VERSION = "rudriq.audit/1.1"
+AUDIT_SCHEMA_VERSION = "rudriq.audit/1.2"
 # 1.0 → 1.1 (Day 16, additive): two new top-level keys, ``evaluations``
 # (list[dict] of EvalResult.to_dict()) and ``evaluation_summary``
 # (per-metric traffic-light dict). Both are ``null`` when the writer
 # was not asked to include them. A 1.0 consumer can ignore the new
 # keys without breakage; the version always honestly reflects what
 # the writer is capable of emitting.
+# 1.1 → 1.2 (Day 1/9 post-v0.1.0, additive): one new top-level key
+# ``root_cause_analysis`` carrying the deviation-weighted RCA output
+# for an auto- or user-selected failure target. ``null`` when
+# ``--include-rca`` is not passed. Schema rules same as 1.1: a 1.1
+# consumer ignores the new key without breakage.
 
 # Default metrics for --include-evals. Drift is omitted by default
 # because it needs a baseline graph; the caller can request it
@@ -387,6 +392,103 @@ def _summarize_evaluations(
 
 
 # ---------------------------------------------------------------------------
+# Root-cause-analysis embedding (Day 1/9 post-v0.1.0 — schema 1.2)
+# ---------------------------------------------------------------------------
+
+
+def _auto_select_failure_target(graph: TraceGraph) -> str | None:
+    """Pick the most likely failure node to diagnose for an audit-embedded RCA.
+
+    Strategy, in priority order:
+
+    1. Run groundedness against the graph and pick the LLM node with
+       the *lowest* score (the most plausibly failing call). Best
+       signal because the score is a real quality metric, not a guess.
+       If groundedness is degraded (fastembed not installed) or every
+       LLM node SKIPs, this branch silently falls through.
+    2. Fallback: the lexicographically last LLM node_id — deterministic
+       and never raises. Not a quality signal, but ensures
+       ``--include-rca`` always produces *something* to look at.
+
+    Returns ``None`` only when the graph has no LLM nodes at all.
+    """
+    try:
+        from rudriq.evaluate.base import EvalStatus
+        from rudriq.evaluate.groundedness import GroundednessEvaluator
+
+        results = GroundednessEvaluator().evaluate(graph)
+        scored = [
+            r for r in results
+            if r.status == EvalStatus.OK
+            and r.score is not None
+            and r.node_id
+        ]
+        if scored:
+            # Sort by (score asc, node_id asc) — lowest groundedness
+            # first, ties broken deterministically by node_id.
+            scored.sort(key=lambda r: (r.score, r.node_id))
+            return scored[0].node_id
+    except Exception:  # noqa: BLE001
+        # Defensive: if the eval framework fails for any reason, fall
+        # through to the lexicographic fallback rather than blowing up
+        # the audit-report path.
+        pass
+
+    llm_node_ids = sorted(
+        n.node_id for n in graph.nodes if n.kind.value.startswith("llm_")
+    )
+    return llm_node_ids[-1] if llm_node_ids else None
+
+
+def _run_audit_rca(
+    graph: TraceGraph,
+    target_node_id: str | None = None,
+    baseline_graph: TraceGraph | None = None,
+    top: int = 5,
+) -> dict[str, Any]:
+    """Run deviation-weighted RCA for inclusion in an audit report.
+
+    When ``target_node_id`` is ``None``, auto-selects via
+    ``_auto_select_failure_target`` so a user running
+    ``rudriq audit --include-rca`` gets a useful diagnosis without
+    having to know node_ids.
+
+    Returned shape (stable for schema 1.2):
+
+    * ``target_node_id`` — the diagnosed node (or ``None`` if none
+      could be selected, e.g. a graph with no LLM nodes)
+    * ``candidates`` — list of ``RootCauseCandidate.to_dict()``, in
+      the analyzer's deterministic order (already sorted by
+      ``-score``, ``chain_distance``, ``node_id``); capped at ``top``
+    * ``note`` — single-sentence reminder that this is a heuristic
+      suspect ranking, not a causal proof
+    """
+    from rudriq.analyzer.deviation_rca import DeviationRCA
+
+    note = (
+        "Ranked suspects by deviation heuristic — proximity, path "
+        "confidence, and (with baseline) shape deviation. NOT a "
+        "causal proof."
+    )
+
+    target = target_node_id or _auto_select_failure_target(graph)
+    if target is None:
+        return {
+            "target_node_id": None,
+            "candidates": [],
+            "note": "No LLM node available to diagnose.",
+        }
+
+    rca = DeviationRCA(baseline_graph=baseline_graph)
+    candidates = rca.analyze(graph, target)[:top]
+    return {
+        "target_node_id": target,
+        "candidates": [c.to_dict() for c in candidates],
+        "note": note,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -397,6 +499,8 @@ def export_audit_json(
     include_evals: bool = False,
     eval_metrics: list[str] | None = None,
     baseline_graph: TraceGraph | None = None,
+    include_rca: bool = False,
+    rca_target: str | None = None,
 ) -> str:
     """
     Export the run's audit report as a JSON string.
@@ -420,7 +524,16 @@ def export_audit_json(
         with ``baseline_graph`` to include drift.
     baseline_graph:
         Required iff ``"drift"`` is in ``eval_metrics``. Loaded by the
-        CLI from ``--baseline-run-id``.
+        CLI from ``--baseline-run-id``. Also reused by RCA when
+        ``include_rca`` is True (enables structural-deviation scoring).
+    include_rca:
+        If True, runs deviation-weighted RCA against the graph and
+        embeds it under ``root_cause_analysis``. Default ``False``.
+    rca_target:
+        Specific node_id to diagnose. When ``None`` (the default), RCA
+        auto-selects the LLM node with the lowest groundedness score,
+        falling back to the lexicographically last LLM node_id if no
+        scoreable result is available.
 
     Raises ValueError if run_id is not in storage.
     """
@@ -440,6 +553,12 @@ def export_audit_json(
     if include_evals:
         evaluations = _run_audit_evaluations(graph, eval_metrics, baseline_graph)
         evaluation_summary = _summarize_evaluations(evaluations)
+
+    root_cause_analysis: dict[str, Any] | None = None
+    if include_rca:
+        root_cause_analysis = _run_audit_rca(
+            graph, rca_target, baseline_graph,
+        )
 
     report = {
         "schema_version": AUDIT_SCHEMA_VERSION,
@@ -467,6 +586,8 @@ def export_audit_json(
         # so the schema version honestly describes the writer.
         "evaluations": evaluations,
         "evaluation_summary": evaluation_summary,
+        # 1.2 addition — same null-when-absent contract.
+        "root_cause_analysis": root_cause_analysis,
     }
 
     return json.dumps(report, indent=2, sort_keys=True, default=str)
@@ -475,6 +596,58 @@ def export_audit_json(
 # ---------------------------------------------------------------------------
 # Markdown rendering
 # ---------------------------------------------------------------------------
+
+
+def _render_rca_markdown(rca: dict[str, Any]) -> list[str]:
+    """Render the ``## Root Cause Analysis`` Markdown section.
+
+    Layout: a one-line "diagnosing node X" header, the honesty note
+    (heuristic suspect ranking), and a ranked table with the per-signal
+    evidence summarized in a single "why flagged" column. The same
+    no-causal-proof framing the analyzer and CLI carry — repeated here
+    because the compliance reader of the report is the one most likely
+    to over-interpret the ranking.
+    """
+    lines: list[str] = ["", "## Root Cause Analysis", ""]
+
+    if not rca or not rca.get("target_node_id"):
+        lines.append(
+            "_No root-cause candidates — no LLM node was available to "
+            "diagnose._"
+        )
+        return lines
+
+    lines.append(f"**Diagnosing:** node `{rca['target_node_id']}`")
+    lines.append("")
+    lines.append(f"_{rca.get('note', '')}_")
+    lines.append("")
+
+    candidates = rca.get("candidates") or []
+    if not candidates:
+        lines.append(
+            "_No upstream operations linked to the target node — "
+            "nothing to rank._"
+        )
+        return lines
+
+    lines.append("| Rank | Operation | Score | Hops upstream | Why flagged |")
+    lines.append("|---|---|---|---|---|")
+    for i, c in enumerate(candidates, 1):
+        ev = c.get("evidence") or {}
+        why_parts: list[str] = []
+        if "structural_deviation" in ev:
+            why_parts.append(f"shape Δ {ev['structural_deviation']:.2f}")
+        if "proximity" in ev:
+            why_parts.append(f"proximity {ev['proximity']:.2f}")
+        if "path_confidence" in ev:
+            why_parts.append(f"conf {ev['path_confidence']:.2f}")
+        why = ", ".join(why_parts) or "—"
+        lines.append(
+            f"| {i} | {c['library']}.{c['operation']} | "
+            f"{c['score']:.3f} | {c['chain_distance']} | {why} |"
+        )
+
+    return lines
 
 
 def _render_eval_markdown(
@@ -560,6 +733,8 @@ def export_audit_markdown(
     include_evals: bool = False,
     eval_metrics: list[str] | None = None,
     baseline_graph: TraceGraph | None = None,
+    include_rca: bool = False,
+    rca_target: str | None = None,
 ) -> str:
     """
     Export the run's audit report as Markdown.
@@ -593,6 +768,12 @@ def export_audit_markdown(
     if include_evals:
         evaluations = _run_audit_evaluations(graph, eval_metrics, baseline_graph)
         evaluation_summary = _summarize_evaluations(evaluations)
+
+    root_cause_analysis: dict[str, Any] | None = None
+    if include_rca:
+        root_cause_analysis = _run_audit_rca(
+            graph, rca_target, baseline_graph,
+        )
 
     lines: list[str] = []
 
@@ -668,6 +849,14 @@ def export_audit_markdown(
     # signal next, before the dense appendix.
     if include_evals and evaluations is not None and evaluation_summary is not None:
         lines.extend(_render_eval_markdown(evaluations, evaluation_summary))
+        lines.append("")
+
+    # Root Cause Analysis (1.2, optional). Sits immediately after the
+    # Quality Evaluation so the reader's question "which one was bad?"
+    # flows naturally into "and what likely caused it?" — both
+    # signals next to each other, both before the dense appendix.
+    if include_rca and root_cause_analysis is not None:
+        lines.extend(_render_rca_markdown(root_cause_analysis))
         lines.append("")
 
     # Full Operations Appendix
