@@ -10,14 +10,12 @@ _(All Critical-priority items resolved as of Day 11. Remaining work is Important
 
 ### Important but deferable
 
-#### Evaluation engine — consistency grouping when retrieval lives inside the user message
-**Status:** Partial fix landed Day 17 Thread B; residual is a property of prompt-assembly choice
+#### Evaluation engine — consistency group_threshold tuning for template-similar prompts
+**Status:** Open (Day 1/9 finding — minor / tuning, not a bug)
 
-Day 17 Thread B added role-separated capture: `rudriq.user_message_preview` is the user-role text only, distinct from any system message in `rudriq.prompt_preview`. ConsistencyEvaluator prefers the user message for grouping. Where the system message carries retrieval context, the fix fully resolves the artifact.
+After three layers of fix (Day 15 → Day 17 Thread B → Day 1/9 question extraction), grouping now operates on the *isolated question text* — retrieval context is fully out of the embedding. On the realistic pipeline this drops the false-group collapse from 1×20 to 3 honest groups (14+2+3) reflecting actual sentence-embedding similarity between questions like `"Tell me about topic 0"` and `"Tell me about topic 1"` — same syntactic frame, single-token tail difference. Those are genuinely similar by embedding metrics.
 
-Residual: pipelines that put retrieval context *inside* the user-role message (e.g., `Context:...Question: <q>` as one user turn — the realistic demo's pattern) still see shared context dominate the embedding. Confirmed on `examples/realistic_rag_pipeline.py`: consistency still groups all 20 distinct queries together because their user-role content is structurally similar.
-
-This is a prompt-assembly choice, not a metric bug. The fix that's defensible without becoming brittle: detect a `Question:` / `Query:` / `User:` delimiter inside the user message and embed only what follows. Fragile across pipelines; left for a future session that has a representative cross-pipeline corpus to validate against. The user-role separation alone is a real correctness win for RAG patterns that follow the OpenAI/Anthropic recommended "retrieval-in-system" convention.
+This is now a threshold-tuning question, not a metric bug. The default `group_threshold=0.85` catches agentic-retry / batch-similar workloads. A pipeline where template-shaped queries are the norm wants ~0.92. Either expose the threshold as a CLI flag on `rudriq evaluate` or learn it per-trace from prompt-distance percentiles — both defer to a session with cross-pipeline data to calibrate against.
 
 #### Concurrency-safe input stash
 **Status:** Resolved (Day 12 Phase C, v0.0.9.dev1)
