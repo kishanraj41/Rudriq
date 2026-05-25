@@ -68,7 +68,7 @@ class _OnePager(FPDF):
         self.set_creation_date(datetime(2026, 5, 25, tzinfo=timezone.utc))
         self.set_producer(_safe("RudriQ one-pager generator"))
         self.set_title(_safe("RudriQ - Design partner brief"))
-        self.set_subject(_safe("Self-hosted AI lineage and audit"))
+        self.set_subject(_safe("AI audit infrastructure for regulated AI"))
 
     def cell(self, *args, **kwargs):
         if len(args) >= 3:
@@ -87,22 +87,28 @@ class _OnePager(FPDF):
     # -- typography ------------------------------------------------
     def title_block(self) -> None:
         self.set_xy(self.l_margin, self.t_margin)
-        self.set_font("Helvetica", "B", 28)
+        self.set_font("Helvetica", "B", 26)
         self.set_text_color(*ACCENT)
-        self.cell(0, 11, "RudriQ", new_x="LMARGIN", new_y="NEXT")
-        self.set_font("Helvetica", "", 11)
+        self.cell(0, 10, "RudriQ", new_x="LMARGIN", new_y="NEXT")
+        self.set_font("Helvetica", "", 10.5)
         self.set_text_color(*DARK)
+        # The locked one-sentence headline. Audit-led, not debug-led:
+        # the wedge is "we produce the artifact a regulator wants",
+        # not "we help you debug your model." Order matters here.
         self.multi_cell(
-            0, 5,
-            "Self-hosted, audit-grade evidence of why AI systems fail.",
+            0, 4.8,
+            "RudriQ is self-hosted audit infrastructure for clinical AI: "
+            "it traces why an answer happened, proves whether it was "
+            "grounded, and produces a compliance-ready report — with "
+            "zero data leaving your environment.",
             new_x="LMARGIN", new_y="NEXT",
         )
         # Accent rule.
-        y = self.get_y() + 2
+        y = self.get_y() + 1.5
         self.set_draw_color(*ACCENT)
         self.set_line_width(0.6)
         self.line(self.l_margin, y, self.w - self.r_margin, y)
-        self.set_y(y + 3)
+        self.set_y(y + 2.5)
 
     def section(self, heading: str, body_lines: list[str]) -> None:
         self.set_x(self.l_margin)
@@ -166,27 +172,42 @@ def build_pdf(output_path: str | Path = "rudriq_onepager.pdf") -> str:
     pdf.section(
         "The problem",
         [
-            "Production AI fails because of upstream data, not the "
-            "model. When a RAG system returns a wrong answer, the cause "
-            "is usually the retrieval or the pipeline - but LLM "
-            "observability tools start at the model call and can't see "
-            "it. For regulated teams, \"we don't know why it failed\" "
-            "is a compliance and liability exposure, not just a bug.",
+            # Audit-led framing: 'compliance exposure' before 'bug'.
+            # Note 'most LLM observability tools', not 'every' — the
+            # claim has to survive a skeptical eng-lead with a Datadog
+            # subscription.
+            "When a clinical AI system gives a wrong or unsupported "
+            "answer, regulated teams can't currently prove why it "
+            "happened or trace it back through the pipeline - and they "
+            "can't do it without sending data to a vendor cloud. For a "
+            "HIPAA-bound or EU AI Act-regulated team, \"we can't "
+            "explain what our AI did\" is a compliance and liability "
+            "exposure, not just an engineering gap. Most LLM "
+            "observability tools begin at the model call, which misses "
+            "the upstream data and retrieval failures that actually "
+            "cause bad answers - and they log to the cloud, which PHI "
+            "can't.",
         ],
     )
 
     pdf.section(
         "What RudriQ does",
         [
-            "- Links every data operation to every LLM call - one "
-            "causal trace across the seam no other tool covers.",
-            "- Scores answer quality locally: groundedness, retrieval "
-            "relevance, drift, consistency, coherence. No cloud calls.",
-            "- Ranks the likely root cause when an answer is wrong "
-            "(honest framing: ranked suspects, not a causal proof).",
-            "- Produces a deterministic, hashable audit report "
-            "(Markdown / JSON / PDF) for EU AI Act, AI-liability "
-            "underwriting, and litigation defense.",
+            # Reordered audit-first, debugging-second. The deliverable
+            # (compliance artifact) is bullet one; the root-cause hook
+            # is the deliberate 'and-also' at the end.
+            "- Produces a deterministic, tamper-evident audit report "
+            "(Markdown / JSON / PDF) for every run - a compliance "
+            "artifact you store and verify, generated entirely "
+            "on-premise.",
+            "- Traces every answer back through retrieval and data "
+            "preparation to its source - the full provenance chain "
+            "behind any output.",
+            "- Proves whether each answer was grounded in its retrieved "
+            "context, scored locally with no cloud calls.",
+            "- And when an answer is wrong, ranks the likely upstream "
+            "cause - so the same tool that audits also tells you why "
+            "it broke.",
         ],
     )
 
@@ -194,24 +215,30 @@ def build_pdf(output_path: str | Path = "rudriq_onepager.pdf") -> str:
         "Why it's different",
         [
             "- Self-hosted. Zero outbound network calls in core. Runs "
-            "inside your VPC, air-gapped capable. Built for buyers who "
-            "can't send PHI to a vendor cloud.",
-            "- OpenTelemetry-compatible, not OpenTelemetry-bound - "
-            "expresses cross-domain lineage that pure-OTel tools "
-            "structurally cannot.",
+            "inside your environment, air-gapped capable. Built for "
+            "teams who cannot send PHI to a vendor cloud - the buyers "
+            "cloud-first observability tools structurally can't serve.",
+            "- OpenTelemetry-compatible, not OpenTelemetry-bound - it "
+            "expresses cross-domain data-to-LLM lineage that pure-OTel "
+            "tools can't represent.",
         ],
     )
 
     pdf.section(
         "Proof",
         [
-            "On a realistic 250-operation RAG pipeline: 23 of 43 LLM "
-            "calls linked to their upstream data (the rest are fresh-"
-            "string query embeddings, correctly unlinked). Drift "
-            "detection validated (1.000 identical vs 0.820 perturbed, "
-            "with new behavior flagged). Audit reports byte-"
-            "reproducible across exports - hash them as evidence. Built "
-            "on AutoLineage, published research (SSRN).",
+            # Linkage metric reframed as completeness, not a raw
+            # fraction. Same underlying truth (every linkable call was
+            # linked; standalone query embeddings have no upstream),
+            # but phrased so the reader doesn't pattern-match 23/43 as
+            # 'partial coverage'.
+            "On a realistic clinical-style RAG pipeline, RudriQ linked "
+            "every answer-generation call that had upstream data "
+            "provenance back to its source, and correctly left "
+            "standalone query embeddings unlinked. Drift detection "
+            "validated (1.000 identical vs 0.820 perturbed). Audit "
+            "reports byte-reproducible. Built on AutoLineage - "
+            "published research (SSRN).",
         ],
     )
 
