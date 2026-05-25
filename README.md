@@ -165,6 +165,10 @@ The toy demo (`rag_with_lineage.ipynb`) is the four-cell intro that walks throug
 
 For design partner outreach and to evaluate RudriQ on something closer to your own workload, see [`examples/realistic_rag_pipeline.ipynb`](examples/realistic_rag_pipeline.ipynb). On v0.0.8 the retrieval-aware substring linker covers **23/43 LLM calls** — every batch embedding (object identity) and every chat completion (substring matching against tracked content embedded in the prompt). The 20 query embeddings remain unlinked by design: they're freshly-constructed strings with no upstream tracked source, and matching them on coincidental similarity would produce false positives that destroy the trust value of the audit report.
 
+### Proof that drift detection works
+
+[`examples/drift_demo.ipynb`](examples/drift_demo.ipynb) is the design-partner answer to "does drift actually work?" — a side-by-side contrast: baseline vs itself produces `drift_response = 1.000`, baseline vs the perturbed run (same prompts, rewritten responses) drops to `0.820` with real fastembed embeddings, and the new unmatched call is flagged as "new behavior." The notebook is honest about the magnitude — small sentence-embedding models cluster claim-style sentences tightly, so the drop reflects both the perturbation size and the embedding model's discriminating power.
+
 ## License
 
 MIT. Use it however you want. Compliance buyers: a paid Enterprise tier with air-gapped install support, dedicated support, and certification path is in development for late 2026.

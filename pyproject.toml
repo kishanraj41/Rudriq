@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rudriq"
-version = "0.1.1.dev1"
+version = "0.1.1.dev2"
 description = "Connect LLM behavior to its upstream data lineage. Operation-level root-cause analysis across data pipelines and LLM calls."
 readme = "README.md"
 license = {text = "MIT"}
