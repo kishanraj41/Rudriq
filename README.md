@@ -169,6 +169,10 @@ For design partner outreach and to evaluate RudriQ on something closer to your o
 
 [`examples/drift_demo.ipynb`](examples/drift_demo.ipynb) is the design-partner answer to "does drift actually work?" — a side-by-side contrast: baseline vs itself produces `drift_response = 1.000`, baseline vs the perturbed run (same prompts, rewritten responses) drops to `0.820` with real fastembed embeddings, and the new unmatched call is flagged as "new behavior." The notebook is honest about the magnitude — small sentence-embedding models cluster claim-style sentences tightly, so the drop reflects both the perturbation size and the embedding model's discriminating power.
 
+### The one-scroll pitch
+
+[`examples/design_partner_demo.ipynb`](examples/design_partner_demo.ipynb) walks a healthcare-AI ML lead through the whole story end-to-end in one scroll: realistic RAG pipeline → one-import capture → unified cross-domain trace (11/11 LLM calls linked in this run) → depth-11 lineage walk → five-evaluator quality scoring (all green) → ranked root-cause suspects with evidence → deterministic hashable audit report as Markdown/JSON/PDF. This is the artifact to screen-share on a first call.
+
 ## License
 
 MIT. Use it however you want. Compliance buyers: a paid Enterprise tier with air-gapped install support, dedicated support, and certification path is in development for late 2026.
