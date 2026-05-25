@@ -493,6 +493,73 @@ def _run_audit_rca(
 # ---------------------------------------------------------------------------
 
 
+def build_audit_report_dict(
+    run_id: str,
+    *,
+    include_evals: bool = False,
+    eval_metrics: list[str] | None = None,
+    baseline_graph: TraceGraph | None = None,
+    include_rca: bool = False,
+    rca_target: str | None = None,
+) -> dict[str, Any]:
+    """Assemble the canonical audit-report dict (schema 1.2).
+
+    This is the single source of truth that both ``export_audit_json``
+    and ``export_audit_pdf`` render from — neither re-parses the
+    other's output. Adding a new format means writing a new renderer
+    over this dict, not re-implementing the assembly. The dict's
+    structure mirrors the JSON shape one-to-one so a JSON consumer and
+    a PDF consumer see the same fields by the same names.
+
+    Determinism: nodes/edges are sorted; ``evaluations`` ordering and
+    RCA candidate ordering inherit from their producers (which sort
+    deterministically by construction).
+
+    Raises ValueError if ``run_id`` is not in storage.
+    """
+    storage = get_default_storage()
+    graph = storage.load_run(run_id)
+    if graph is None:
+        raise ValueError(f"Run not found: {run_id}")
+
+    summary = _compute_summary(graph)
+    chains = _compute_lineage_chains(graph)
+    nodes_sorted = _sorted_nodes(graph)
+    edges_sorted = _sorted_edges(graph)
+
+    evaluations: list[dict[str, Any]] | None = None
+    evaluation_summary: dict[str, dict[str, Any]] | None = None
+    if include_evals:
+        evaluations = _run_audit_evaluations(graph, eval_metrics, baseline_graph)
+        evaluation_summary = _summarize_evaluations(evaluations)
+
+    root_cause_analysis: dict[str, Any] | None = None
+    if include_rca:
+        root_cause_analysis = _run_audit_rca(
+            graph, rca_target, baseline_graph,
+        )
+
+    return {
+        "schema_version": AUDIT_SCHEMA_VERSION,
+        "summary": summary,
+        "run": {
+            "run_id": graph.run_id,
+            "created_at": graph.created_at.isoformat(),
+            "metadata": graph.metadata,
+            "node_count": len(nodes_sorted),
+            "edge_count": len(edges_sorted),
+            "nodes": [n.to_dict() for n in nodes_sorted],
+            "edges": [e.to_dict() for e in edges_sorted],
+        },
+        "lineage_chains": chains,
+        # 1.1 additions — always present, ``null`` when not requested.
+        "evaluations": evaluations,
+        "evaluation_summary": evaluation_summary,
+        # 1.2 addition.
+        "root_cause_analysis": root_cause_analysis,
+    }
+
+
 def export_audit_json(
     run_id: str,
     *,
@@ -537,59 +604,14 @@ def export_audit_json(
 
     Raises ValueError if run_id is not in storage.
     """
-    storage = get_default_storage()
-    graph = storage.load_run(run_id)
-    if graph is None:
-        raise ValueError(f"Run not found: {run_id}")
-
-    summary = _compute_summary(graph)
-    chains = _compute_lineage_chains(graph)
-
-    nodes_sorted = _sorted_nodes(graph)
-    edges_sorted = _sorted_edges(graph)
-
-    evaluations: list[dict[str, Any]] | None = None
-    evaluation_summary: dict[str, dict[str, Any]] | None = None
-    if include_evals:
-        evaluations = _run_audit_evaluations(graph, eval_metrics, baseline_graph)
-        evaluation_summary = _summarize_evaluations(evaluations)
-
-    root_cause_analysis: dict[str, Any] | None = None
-    if include_rca:
-        root_cause_analysis = _run_audit_rca(
-            graph, rca_target, baseline_graph,
-        )
-
-    report = {
-        "schema_version": AUDIT_SCHEMA_VERSION,
-        # No ``generated_at`` here — Day 17 Thread A. The audit report
-        # describes a run, which has its own ``created_at`` (preserved
-        # below). The export wall-clock is not an auditable property,
-        # and including it broke byte-determinism: a compliance
-        # workflow that hashes the report to prove it's the exact
-        # artifact the system produced got a different hash on every
-        # export. If operational provenance is needed, write it to a
-        # sidecar (or print to stderr in the CLI) — never into the
-        # hashable body.
-        "summary": summary,
-        "run": {
-            "run_id": graph.run_id,
-            "created_at": graph.created_at.isoformat(),
-            "metadata": graph.metadata,
-            "node_count": len(nodes_sorted),
-            "edge_count": len(edges_sorted),
-            "nodes": [n.to_dict() for n in nodes_sorted],
-            "edges": [e.to_dict() for e in edges_sorted],
-        },
-        "lineage_chains": chains,
-        # 1.1 additions — always present, ``null`` when not requested,
-        # so the schema version honestly describes the writer.
-        "evaluations": evaluations,
-        "evaluation_summary": evaluation_summary,
-        # 1.2 addition — same null-when-absent contract.
-        "root_cause_analysis": root_cause_analysis,
-    }
-
+    report = build_audit_report_dict(
+        run_id,
+        include_evals=include_evals,
+        eval_metrics=eval_metrics,
+        baseline_graph=baseline_graph,
+        include_rca=include_rca,
+        rca_target=rca_target,
+    )
     return json.dumps(report, indent=2, sort_keys=True, default=str)
 
 

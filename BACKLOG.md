@@ -43,12 +43,6 @@ Two timezone bugs caught (Day 2 DuckDB roundtrip, Day 7 AutoLineage timestamp). 
 
 ### Operational
 
-#### PDF export of audit reports
-**Status:** Stub raises NotImplementedError
-**Origin:** Day 5
-
-The CLI accepts `--format pdf` and prints a friendly error pointing at pandoc. Real PDF rendering (via reportlab, weasyprint, or pandoc bridging) is deferred to v0.3 / when a design partner asks for it.
-
 #### User-supplied audit templates
 **Status:** Stub raises NotImplementedError
 **Origin:** Day 5
@@ -56,6 +50,21 @@ The CLI accepts `--format pdf` and prints a friendly error pointing at pandoc. R
 `generate_audit_report(template="custom-internal")` raises NotImplementedError. Real templates would let a customer supply their own Jinja2 template that maps the trace graph onto their internal compliance format. Deferred to v0.3.
 
 ## Resolved
+
+### Day 1/9 Thread 2 — Native PDF audit export via fpdf2 ✅
+**Resolved:** May 25, 2026 (v0.1.1.dev3, after weasyprint-vs-fpdf2 design decision)
+
+`rudriq audit --format pdf --output FILE` produces a styled PDF audit report — the last product gap a compliance buyer asks for. Optional `rudriq[pdf]` extra (fpdf2 only — pure Python, no system-library deps, installs clean on Windows).
+
+**Architecture decision:** render from the structured report dict (`build_audit_report_dict` extracted as the single source of truth shared with the JSON exporter), NOT by parsing the Markdown. Both formats now walk the same dict, so they can't drift.
+
+**Determinism:** fpdf2's `set_creation_date(None)` does NOT suppress the metadata timestamp — it sets it to current time (verified against the 2.8.7 docstring). The exporter pins `creation_date` to the run's own `created_at`, plus fixed `producer` / `title` / `subject` strings. Verified live on the realistic pipeline: 8 381 bytes byte-identical across two consecutive exports.
+
+**Unicode handling:** fpdf2's built-in Helvetica is Latin-1; evaluator explanations and the RCA note carry em dashes / ellipses / Greek `Δ`. A class-level `cell` / `multi_cell` override sanitizes through a small substitution table before delegating to super — cleaner than adding a multi-megabyte TTF font dependency, and the failure surface is "fuzzy character" rather than "render crash."
+
+**Rendering quirk learned:** fpdf2's `multi_cell` defaults to `new_x=XPos.RIGHT`, leaving the cursor at the right margin after rendering. The next `cell()` call then has zero usable width and crashes with "Not enough horizontal space to render a single character." Every multi_cell in the renderer now uses `new_x="LMARGIN", new_y="NEXT"` explicitly.
+
+6 new tests (`tests/test_pdf_export.py`): valid-PDF output, full report with evals+RCA, byte-determinism guard, graceful degradation when fpdf2 is absent, missing-run handling, and a guard that `export_audit_json` round-trips through `build_audit_report_dict` (so the JSON and PDF paths can't silently drift). 230 → 236 total tests passing.
 
 ### Day 17 — Audit hardening, consistency fix, RCA, drift validation ✅
 **Resolved:** May 23, 2026 (Day 17 Threads A–D, v0.1.0.dev4 → dev7)

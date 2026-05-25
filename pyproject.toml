@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rudriq"
-version = "0.1.1.dev2"
+version = "0.1.1.dev3"
 description = "Connect LLM behavior to its upstream data lineage. Operation-level root-cause analysis across data pipelines and LLM calls."
 readme = "README.md"
 license = {text = "MIT"}
@@ -69,12 +69,22 @@ evaluate = [
     "fastembed>=0.3,<1.0",
     "numpy>=1.24",
 ]
+pdf = [
+    # PDF audit-report export. fpdf2 chosen over weasyprint: pure
+    # Python, no system-library dependencies, installs clean on
+    # Windows — the right shape for a self-hosted tool a customer
+    # installs. The PDF exporter renders from the structured report
+    # dict (not Markdown), so the only thing fpdf2 brings is PDF
+    # primitives.
+    "fpdf2>=2.7",
+]
 all = [
     "traceloop-sdk>=0.30",
     "openai>=1.0,<2.0",
     "autolineage>=0.6.1,<0.7",
     "fastembed>=0.3,<1.0",
     "numpy>=1.24",
+    "fpdf2>=2.7",
 ]
 dev = [
     "pytest>=7.0",

@@ -142,12 +142,34 @@ def _cmd_audit(args: argparse.Namespace) -> int:
                 rca_target=rca_target,
             )
         elif args.format == "pdf":
-            print(
-                "error: PDF rendering not yet supported. "
-                "Use --format markdown and convert with pandoc.",
-                file=sys.stderr,
-            )
-            return 2
+            # PDF goes straight to disk — fpdf2's output() is binary, not
+            # serializable to a stdout string, and a compliance officer
+            # always wants a file anyway.
+            if not args.output:
+                print(
+                    "error: --format pdf requires --output FILE.",
+                    file=sys.stderr,
+                )
+                return 2
+            try:
+                from rudriq.export.pdf import export_audit_pdf
+            except ImportError as exc:
+                print(f"error: PDF export not available: {exc}", file=sys.stderr)
+                return 2
+            try:
+                export_audit_pdf(
+                    args.run_id, args.output,
+                    include_evals=include_evals,
+                    eval_metrics=eval_metrics,
+                    baseline_graph=baseline_graph,
+                    include_rca=include_rca,
+                    rca_target=rca_target,
+                )
+            except RuntimeError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                return 2
+            print(f"PDF audit report written to {args.output}", file=sys.stderr)
+            return 0
         else:
             print(f"error: unknown format '{args.format}'", file=sys.stderr)
             return 2
