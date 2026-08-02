@@ -1,0 +1,96 @@
+{
+  "clusters": {
+    "bounded_fp": [
+      {
+        "band": 0.8,
+        "kind": "wrong-parent",
+        "name": "content_hash aliasing",
+        "strategy": "content_hash"
+      },
+      {
+        "band": 0.7,
+        "kind": "spurious-link",
+        "name": "substring generic-collision",
+        "strategy": "substring"
+      }
+    ],
+    "latency_regime": {
+      "common_path_us": 9.5,
+      "content_hash": "~1000x in-process; storage I/O; batch/defer",
+      "substring": "O(n) registry scan; inverted-index roadmap"
+    },
+    "structural_recall_ceiling": {
+      "cause": "name_match strategy is a stub (returns None)",
+      "class": "paraphrased_derived",
+      "roadmap": "implement name_match"
+    }
+  },
+  "threshold_sweep": [
+    {
+      "admits_fp_modes": [],
+      "precision": 1.0,
+      "precision_ci": [
+        0.9630051925239981,
+        0.9999999999999999
+      ],
+      "recall": 0.16,
+      "recall_ci": [
+        0.13334789344834297,
+        0.19080623375952627
+      ],
+      "threshold": 1.0
+    },
+    {
+      "admits_fp_modes": [],
+      "precision": 1.0,
+      "precision_ci": [
+        0.9873565700022643,
+        0.9999999999999999
+      ],
+      "recall": 0.48,
+      "recall_ci": [
+        0.44107318568312015,
+        0.5191711747408723
+      ],
+      "threshold": 0.95
+    },
+    {
+      "admits_fp_modes": [
+        "hash_aliasing"
+      ],
+      "precision": 0.9411764705882353,
+      "precision_ci": [
+        0.9146064941916695,
+        0.9598422533179004
+      ],
+      "recall": 0.64,
+      "recall_ci": [
+        0.6016181144418893,
+        0.6766713625901646
+      ],
+      "threshold": 0.8
+    },
+    {
+      "admits_fp_modes": [
+        "hash_aliasing",
+        "substring_generic_collision"
+      ],
+      "precision": 0.9090909090909091,
+      "precision_ci": [
+        0.8821432176191181,
+        0.930363462991367
+      ],
+      "recall": 0.8,
+      "recall_ci": [
+        0.7668495622769113,
+        0.8294850313632044
+      ],
+      "threshold": 0.7
+    }
+  ],
+  "trust_envelope": {
+    "fp_intolerant_threshold": 0.95,
+    "recall_maximising_threshold": 0.7,
+    "structural_blind_spot": "paraphrased_derived (name_match stub) - unrecoverable at any threshold"
+  }
+}

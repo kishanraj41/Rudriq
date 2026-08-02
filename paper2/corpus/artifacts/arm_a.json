@@ -1,0 +1,441 @@
+{
+  "arm": "A",
+  "config": {
+    "constructors": [
+      "verbatim_object",
+      "element_of_collection",
+      "exact_copy",
+      "templated_containment",
+      "paraphrased_derived",
+      "strategy_collision"
+    ],
+    "n_per_class": 3
+  },
+  "corpus_version": "arm-a/0.1.0",
+  "entries": [
+    {
+      "case_id": "vo-0",
+      "collision_parents": [],
+      "constructor": "verbatim_object",
+      "expected_confidences": [
+        1.0
+      ],
+      "expected_method": "object_identity",
+      "gate_passed": true,
+      "gate_regime": "production-fires(object_identity)",
+      "idx": 0,
+      "mechanism_class": "verbatim_object",
+      "notes": "input is the registered object; substring co-fires in isolation (accepted).",
+      "pool": "linked_true",
+      "primary_source": null,
+      "rendered_input": "Record 0: quarterly revenue for business unit 0 reached 1000 thousand units across all reporting regions.",
+      "trichotomy": "linked_true",
+      "true_parent_id": "vo-0"
+    },
+    {
+      "case_id": "vo-1",
+      "collision_parents": [],
+      "constructor": "verbatim_object",
+      "expected_confidences": [
+        1.0
+      ],
+      "expected_method": "object_identity",
+      "gate_passed": true,
+      "gate_regime": "production-fires(object_identity)",
+      "idx": 1,
+      "mechanism_class": "verbatim_object",
+      "notes": "input is the registered object; substring co-fires in isolation (accepted).",
+      "pool": "linked_true",
+      "primary_source": null,
+      "rendered_input": "Record 1: quarterly revenue for business unit 1 reached 1007 thousand units across all reporting regions.",
+      "trichotomy": "linked_true",
+      "true_parent_id": "vo-1"
+    },
+    {
+      "case_id": "vo-2",
+      "collision_parents": [],
+      "constructor": "verbatim_object",
+      "expected_confidences": [
+        1.0
+      ],
+      "expected_method": "object_identity",
+      "gate_passed": true,
+      "gate_regime": "production-fires(object_identity)",
+      "idx": 2,
+      "mechanism_class": "verbatim_object",
+      "notes": "input is the registered object; substring co-fires in isolation (accepted).",
+      "pool": "linked_true",
+      "primary_source": null,
+      "rendered_input": "Record 2: quarterly revenue for business unit 2 reached 1014 thousand units across all reporting regions.",
+      "trichotomy": "linked_true",
+      "true_parent_id": "vo-2"
+    },
+    {
+      "case_id": "eoc-0",
+      "collision_parents": [],
+      "constructor": "element_of_collection",
+      "expected_confidences": [
+        0.95
+      ],
+      "expected_method": "object_identity",
+      "gate_passed": true,
+      "gate_regime": "production-fires(object_identity)",
+      "idx": 0,
+      "mechanism_class": "element_of_collection",
+      "notes": "registered element at non-zero index; proves explicit-element registration.",
+      "pool": "linked_true",
+      "primary_source": null,
+      "rendered_input": [
+        "Unrelated filler passage 0-0 with sufficient length to scan.",
+        "Record 0: quarterly revenue for business unit 0 reached 1000 thousand units across all reporting regions.",
+        "Unrelated filler passage 0-1 with sufficient length to scan."
+      ],
+      "trichotomy": "linked_true",
+      "true_parent_id": "eoc-0"
+    },
+    {
+      "case_id": "eoc-1",
+      "collision_parents": [],
+      "constructor": "element_of_collection",
+      "expected_confidences": [
+        0.95
+      ],
+      "expected_method": "object_identity",
+      "gate_passed": true,
+      "gate_regime": "production-fires(object_identity)",
+      "idx": 1,
+      "mechanism_class": "element_of_collection",
+      "notes": "registered element at non-zero index; proves explicit-element registration.",
+      "pool": "linked_true",
+      "primary_source": null,
+      "rendered_input": [
+        "Unrelated filler passage 1-0 with sufficient length to scan.",
+        "Record 1: quarterly revenue for business unit 1 reached 1007 thousand units across all reporting regions.",
+        "Unrelated filler passage 1-1 with sufficient length to scan."
+      ],
+      "trichotomy": "linked_true",
+      "true_parent_id": "eoc-1"
+    },
+    {
+      "case_id": "eoc-2",
+      "collision_parents": [],
+      "constructor": "element_of_collection",
+      "expected_confidences": [
+        0.95
+      ],
+      "expected_method": "object_identity",
+      "gate_passed": true,
+      "gate_regime": "production-fires(object_identity)",
+      "idx": 2,
+      "mechanism_class": "element_of_collection",
+      "notes": "registered element at non-zero index; proves explicit-element registration.",
+      "pool": "linked_true",
+      "primary_source": null,
+      "rendered_input": [
+        "Unrelated filler passage 2-0 with sufficient length to scan.",
+        "Record 2: quarterly revenue for business unit 2 reached 1014 thousand units across all reporting regions.",
+        "Unrelated filler passage 2-1 with sufficient length to scan."
+      ],
+      "trichotomy": "linked_true",
+      "true_parent_id": "eoc-2"
+    },
+    {
+      "case_id": "ec-0",
+      "collision_parents": [],
+      "constructor": "exact_copy",
+      "expected_confidences": [
+        0.8
+      ],
+      "expected_method": "content_hash",
+      "gate_passed": true,
+      "gate_regime": "production-fires(content_hash)+isolation-silence",
+      "idx": 0,
+      "mechanism_class": "exact_copy",
+      "notes": "storage-exclusive; only content_hash satisfiable (isolation-silence).",
+      "pool": "linked_true",
+      "primary_source": null,
+      "rendered_input": "Record 0: quarterly revenue for business unit 0 reached 1000 thousand units across all reporting regions.",
+      "trichotomy": "linked_true",
+      "true_parent_id": "ec-0"
+    },
+    {
+      "case_id": "ec-1",
+      "collision_parents": [],
+      "constructor": "exact_copy",
+      "expected_confidences": [
+        0.8
+      ],
+      "expected_method": "content_hash",
+      "gate_passed": true,
+      "gate_regime": "production-fires(content_hash)+isolation-silence",
+      "idx": 1,
+      "mechanism_class": "exact_copy",
+      "notes": "storage-exclusive; only content_hash satisfiable (isolation-silence).",
+      "pool": "linked_true",
+      "primary_source": null,
+      "rendered_input": "Record 1: quarterly revenue for business unit 1 reached 1007 thousand units across all reporting regions.",
+      "trichotomy": "linked_true",
+      "true_parent_id": "ec-1"
+    },
+    {
+      "case_id": "ec-2",
+      "collision_parents": [],
+      "constructor": "exact_copy",
+      "expected_confidences": [
+        0.8
+      ],
+      "expected_method": "content_hash",
+      "gate_passed": true,
+      "gate_regime": "production-fires(content_hash)+isolation-silence",
+      "idx": 2,
+      "mechanism_class": "exact_copy",
+      "notes": "storage-exclusive; only content_hash satisfiable (isolation-silence).",
+      "pool": "linked_true",
+      "primary_source": null,
+      "rendered_input": "Record 2: quarterly revenue for business unit 2 reached 1014 thousand units across all reporting regions.",
+      "trichotomy": "linked_true",
+      "true_parent_id": "ec-2"
+    },
+    {
+      "case_id": "tc-0",
+      "collision_parents": [],
+      "constructor": "templated_containment",
+      "expected_confidences": [
+        0.5,
+        0.7
+      ],
+      "expected_method": "substring",
+      "gate_passed": true,
+      "gate_regime": "production-fires(substring)",
+      "idx": 0,
+      "mechanism_class": "templated_containment",
+      "notes": "source fully contained in prompt; substring is the intended winner.",
+      "pool": "linked_true",
+      "primary_source": null,
+      "rendered_input": [
+        {
+          "content": "Answer using only the provided context.",
+          "role": "system"
+        },
+        {
+          "content": "Context:\nRecord 0: quarterly revenue for business unit 0 reached 1000 thousand units across all reporting regions.\n\nQuestion: please summarise.",
+          "role": "user"
+        }
+      ],
+      "trichotomy": "linked_true",
+      "true_parent_id": "tc-0"
+    },
+    {
+      "case_id": "tc-1",
+      "collision_parents": [],
+      "constructor": "templated_containment",
+      "expected_confidences": [
+        0.5,
+        0.7
+      ],
+      "expected_method": "substring",
+      "gate_passed": true,
+      "gate_regime": "production-fires(substring)",
+      "idx": 1,
+      "mechanism_class": "templated_containment",
+      "notes": "source fully contained in prompt; substring is the intended winner.",
+      "pool": "linked_true",
+      "primary_source": null,
+      "rendered_input": [
+        {
+          "content": "Answer using only the provided context.",
+          "role": "system"
+        },
+        {
+          "content": "Context:\nRecord 1: quarterly revenue for business unit 1 reached 1007 thousand units across all reporting regions.\n\nQuestion: please summarise.",
+          "role": "user"
+        }
+      ],
+      "trichotomy": "linked_true",
+      "true_parent_id": "tc-1"
+    },
+    {
+      "case_id": "tc-2",
+      "collision_parents": [],
+      "constructor": "templated_containment",
+      "expected_confidences": [
+        0.5,
+        0.7
+      ],
+      "expected_method": "substring",
+      "gate_passed": true,
+      "gate_regime": "production-fires(substring)",
+      "idx": 2,
+      "mechanism_class": "templated_containment",
+      "notes": "source fully contained in prompt; substring is the intended winner.",
+      "pool": "linked_true",
+      "primary_source": null,
+      "rendered_input": [
+        {
+          "content": "Answer using only the provided context.",
+          "role": "system"
+        },
+        {
+          "content": "Context:\nRecord 2: quarterly revenue for business unit 2 reached 1014 thousand units across all reporting regions.\n\nQuestion: please summarise.",
+          "role": "user"
+        }
+      ],
+      "trichotomy": "linked_true",
+      "true_parent_id": "tc-2"
+    },
+    {
+      "case_id": "pd-0",
+      "collision_parents": [],
+      "constructor": "paraphrased_derived",
+      "expected_confidences": [],
+      "expected_method": null,
+      "gate_passed": true,
+      "gate_regime": "silence(inverted: any fire = leaked containment)",
+      "idx": 0,
+      "mechanism_class": "paraphrased_derived",
+      "notes": "recall ceiling: construction-provable derivation (digit->word transcoding of the source datum), injective per source, FN by design. Free-form semantic paraphrase (derivation established by annotation, not construction) is Arm B's job.",
+      "pool": "linked_true",
+      "primary_source": null,
+      "rendered_input": "The reporting period's headline figure, transcribed from the source record, reads one four two zero when written out as a sequence of words.",
+      "trichotomy": "linked_true",
+      "true_parent_id": "pd-0"
+    },
+    {
+      "case_id": "pd-1",
+      "collision_parents": [],
+      "constructor": "paraphrased_derived",
+      "expected_confidences": [],
+      "expected_method": null,
+      "gate_passed": true,
+      "gate_regime": "silence(inverted: any fire = leaked containment)",
+      "idx": 1,
+      "mechanism_class": "paraphrased_derived",
+      "notes": "recall ceiling: construction-provable derivation (digit->word transcoding of the source datum), injective per source, FN by design. Free-form semantic paraphrase (derivation established by annotation, not construction) is Arm B's job.",
+      "pool": "linked_true",
+      "primary_source": null,
+      "rendered_input": "The reporting period's headline figure, transcribed from the source record, reads one four two one when written out as a sequence of words.",
+      "trichotomy": "linked_true",
+      "true_parent_id": "pd-1"
+    },
+    {
+      "case_id": "pd-2",
+      "collision_parents": [],
+      "constructor": "paraphrased_derived",
+      "expected_confidences": [],
+      "expected_method": null,
+      "gate_passed": true,
+      "gate_regime": "silence(inverted: any fire = leaked containment)",
+      "idx": 2,
+      "mechanism_class": "paraphrased_derived",
+      "notes": "recall ceiling: construction-provable derivation (digit->word transcoding of the source datum), injective per source, FN by design. Free-form semantic paraphrase (derivation established by annotation, not construction) is Arm B's job.",
+      "pool": "linked_true",
+      "primary_source": null,
+      "rendered_input": "The reporting period's headline figure, transcribed from the source record, reads one four two two when written out as a sequence of words.",
+      "trichotomy": "linked_true",
+      "true_parent_id": "pd-2"
+    },
+    {
+      "case_id": "col-0-sym",
+      "collision_parents": [
+        [
+          "object_identity",
+          "col-A-0"
+        ],
+        [
+          "substring",
+          "col-B-0"
+        ]
+      ],
+      "constructor": "strategy_collision",
+      "expected_confidences": [
+        0.95
+      ],
+      "expected_method": "object_identity",
+      "gate_passed": true,
+      "gate_regime": "collision(four-part shadow condition)",
+      "idx": 0,
+      "mechanism_class": "strategy_collision",
+      "notes": "collision: object_identity->P_A masks substring->P_B in production; symmetric (both true; finding is what-gets-masked)",
+      "pool": "linked_true",
+      "primary_source": null,
+      "rendered_input": [
+        "Record 0: quarterly revenue for business unit 0 reached 1000 thousand units across all reporting regions.",
+        "Reference note: Memo 0: supply-chain lead times shortened by 3 days following the logistics consolidation across the northern hubs. (end of reference)."
+      ],
+      "trichotomy": "linked_true",
+      "true_parent_id": null
+    },
+    {
+      "case_id": "col-1-sym",
+      "collision_parents": [
+        [
+          "object_identity",
+          "col-A-1"
+        ],
+        [
+          "substring",
+          "col-B-1"
+        ]
+      ],
+      "constructor": "strategy_collision",
+      "expected_confidences": [
+        0.95
+      ],
+      "expected_method": "object_identity",
+      "gate_passed": true,
+      "gate_regime": "collision(four-part shadow condition)",
+      "idx": 1,
+      "mechanism_class": "strategy_collision",
+      "notes": "collision: object_identity->P_A masks substring->P_B in production; symmetric (both true; finding is what-gets-masked)",
+      "pool": "linked_true",
+      "primary_source": null,
+      "rendered_input": [
+        "Record 1: quarterly revenue for business unit 1 reached 1007 thousand units across all reporting regions.",
+        "Reference note: Memo 1: supply-chain lead times shortened by 4 days following the logistics consolidation across the northern hubs. (end of reference)."
+      ],
+      "trichotomy": "linked_true",
+      "true_parent_id": null
+    },
+    {
+      "case_id": "col-2-sym",
+      "collision_parents": [
+        [
+          "object_identity",
+          "col-A-2"
+        ],
+        [
+          "substring",
+          "col-B-2"
+        ]
+      ],
+      "constructor": "strategy_collision",
+      "expected_confidences": [
+        0.95
+      ],
+      "expected_method": "object_identity",
+      "gate_passed": true,
+      "gate_regime": "collision(four-part shadow condition)",
+      "idx": 2,
+      "mechanism_class": "strategy_collision",
+      "notes": "collision: object_identity->P_A masks substring->P_B in production; symmetric (both true; finding is what-gets-masked)",
+      "pool": "linked_true",
+      "primary_source": null,
+      "rendered_input": [
+        "Record 2: quarterly revenue for business unit 2 reached 1014 thousand units across all reporting regions.",
+        "Reference note: Memo 2: supply-chain lead times shortened by 5 days following the logistics consolidation across the northern hubs. (end of reference)."
+      ],
+      "trichotomy": "linked_true",
+      "true_parent_id": null
+    }
+  ],
+  "pool_mapping": {
+    "arm": "A",
+    "note": "Arm A is the LINKED-TRUE positive/control arm. The negative pools (true_negative, out_of_scope) that FPR/specificity require are sourced from Arm C, never from Arm A. The labeler fixture in mechanisms.LABELER_FIXTURES is not corpus membership.",
+    "out_of_scope_pool_source": "arm_c",
+    "provides_pools": [
+      "linked_true"
+    ],
+    "role": "positive/control",
+    "true_negative_pool_source": "arm_c"
+  }
+}

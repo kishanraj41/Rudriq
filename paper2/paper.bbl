@@ -1,0 +1,119 @@
+\begin{thebibliography}{17}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[{Arize AI}(2024)]{phoenix}
+{Arize AI}.
+\newblock {Phoenix}: Open-source {AI} observability and evaluation.
+\newblock \url{https://phoenix.arize.com}, 2024.
+\newblock OpenInference / OpenTelemetry; accessed 2026.
+
+\bibitem[Cheney et~al.(2009)Cheney, Chiticariu, and Tan]{cheney2009provenance}
+James Cheney, Laura Chiticariu, and Wang-Chiew Tan.
+\newblock Provenance in databases: Why, how, and where.
+\newblock \emph{Foundations and Trends in Databases}, 1\penalty0 (4):\penalty0
+  379--474, 2009.
+
+\bibitem[Es et~al.(2024)Es, James, Espinosa-Anke, and Schockaert]{es2024ragas}
+Shahul Es, Jithin James, Luis Espinosa-Anke, and Steven Schockaert.
+\newblock {RAGAS}: Automated evaluation of retrieval augmented generation.
+\newblock In \emph{Proceedings of EACL 2024 (System Demonstrations)}, 2024.
+\newblock arXiv:2309.15217.
+
+\bibitem[Guo et~al.(2017)Guo, Pleiss, Sun, and Weinberger]{guo2017calibration}
+Chuan Guo, Geoff Pleiss, Yu~Sun, and Kilian~Q. Weinberger.
+\newblock On calibration of modern neural networks.
+\newblock In \emph{Proceedings of the 34th International Conference on Machine
+  Learning (ICML)}, volume~70 of \emph{PMLR}, pages 1321--1330, 2017.
+\newblock arXiv:1706.04599.
+
+\bibitem[{LangChain, Inc.}(2024)]{langsmith}
+{LangChain, Inc.}
+\newblock {LangSmith}: {LLM} and agent observability and evaluation.
+\newblock \url{https://docs.langchain.com/langsmith}, 2024.
+\newblock Accessed 2026.
+
+\bibitem[{Langfuse}(2024)]{langfuse}
+{Langfuse}.
+\newblock {Langfuse}: Open-source {LLM} engineering platform.
+\newblock \url{https://langfuse.com}, 2024.
+\newblock Tracing, evaluation, prompt management; accessed 2026.
+
+\bibitem[{LinkedIn and Acryl Data}(2020)]{datahub}
+{LinkedIn and Acryl Data}.
+\newblock {DataHub}: A metadata platform for the modern data stack.
+\newblock \url{https://datahub.com}, 2020.
+\newblock Open-source metadata, search, and lineage platform; accessed 2026.
+
+\bibitem[Niculescu-Mizil and Caruana(2005)]{niculescu2005probabilities}
+Alexandru Niculescu-Mizil and Rich Caruana.
+\newblock Predicting good probabilities with supervised learning.
+\newblock In \emph{Proceedings of the 22nd International Conference on Machine
+  Learning (ICML)}, pages 625--632, 2005.
+
+\bibitem[{OpenLineage Project, LF AI \& Data Foundation}(2021)]{openlineage}
+{OpenLineage Project, LF AI \& Data Foundation}.
+\newblock {OpenLineage}: An open standard for lineage metadata collection.
+\newblock \url{https://openlineage.io}, 2021.
+\newblock Open standard; accessed 2026.
+
+\bibitem[Saad-Falcon et~al.(2024)Saad-Falcon, Khattab, Potts, and
+  Zaharia]{saadfalcon2024ares}
+Jon Saad-Falcon, Omar Khattab, Christopher Potts, and Matei Zaharia.
+\newblock {ARES}: An automated evaluation framework for retrieval-augmented
+  generation systems.
+\newblock In \emph{Proceedings of NAACL 2024 (Long Papers)}, 2024.
+\newblock arXiv:2311.09476.
+
+\bibitem[{Traceloop}(2024)]{openllmetry}
+{Traceloop}.
+\newblock {OpenLLMetry}: {OpenTelemetry}-based observability for {LLM}
+  applications.
+\newblock \url{https://github.com/traceloop/openllmetry}, 2024.
+\newblock Apache 2.0; accessed 2026.
+
+\bibitem[{TruEra (Snowflake)}(2024)]{trulens}
+{TruEra (Snowflake)}.
+\newblock {TruLens}: Feedback functions for {LLM}/{RAG} evaluation.
+\newblock \url{https://www.trulens.org}, 2024.
+\newblock The ``RAG triad''; accessed 2026.
+
+\bibitem[VG(2026)]{vg2026autolineage}
+Kishan~Raj VG.
+\newblock {AutoLineage}: Operation-level data lineage for {Python} {ML}
+  pipelines via import-time hooking.
+\newblock SSRN preprint, 2026.
+\newblock URL
+  \url{https://papers.ssrn.com/sol3/papers.cfm?abstract_id=6683825}.
+\newblock abstract\_id=6683825 (Paper 1).
+
+\bibitem[{Weights \& Biases, Inc.}(2024)]{wandb}
+{Weights \& Biases, Inc.}
+\newblock Weights \& biases: Experiment tracking and artifact versioning.
+\newblock \url{https://wandb.ai}, 2024.
+\newblock MLOps platform; accessed 2026.
+
+\bibitem[Yin et~al.(2025)Yin, Chen, Lee, and Liu]{yin2025schemalineage}
+Jiaqi Yin, Yi-Wei Chen, Meng-Lung Lee, and Xiya Liu.
+\newblock Schema lineage extraction at scale: Multilingual pipelines, composite
+  evaluation, and language-model benchmarks, 2025.
+
+\bibitem[Zaharia et~al.(2018)Zaharia, Chen, Davidson, Ghodsi, Hong, Konwinski,
+  Murching, Nykodym, Ogilvie, Parkhe, Xie, and Zumar]{zaharia2018mlflow}
+Matei Zaharia, Andrew Chen, Aaron Davidson, Ali Ghodsi, Sue~Ann Hong, Andy
+  Konwinski, Siddharth Murching, Tomas Nykodym, Paul Ogilvie, Mani Parkhe, Fen
+  Xie, and Corey Zumar.
+\newblock Accelerating the machine learning lifecycle with {MLflow}.
+\newblock \emph{IEEE Data Engineering Bulletin}, 41\penalty0 (4):\penalty0
+  39--45, 2018.
+
+\bibitem[Zhao(2025)]{zhao2025xprov}
+Jinjin Zhao.
+\newblock Learning lineage constraints for data science operations ({XProv}),
+  2025.
+\newblock Vision paper.
+
+\end{thebibliography}

@@ -234,3 +234,17 @@ htmlcov/
 .DS_Store
 .claude
 rudriq.egg-info
+# LaTeX build artifacts (paper2/). paper.bbl IS tracked: arXiv uses it to skip BibTeX.
+*.aux
+*.blg
+*.out
+*.xdv
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+
+# Office lock files
+.~lock.*#
+
+# Executed notebook outputs (regenerate from the source notebooks)
+*.executed.ipynb

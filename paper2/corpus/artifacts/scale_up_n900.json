@@ -1,0 +1,189 @@
+{
+  "adversarial_surface": {
+    "hash_aliasing": 25,
+    "substring_generic_collision": 25
+  },
+  "calibration": {
+    "band_precision": {
+      "0.7": {
+        "ci": [
+          0.7214084909988655,
+          0.860701634923197
+        ],
+        "estimable": true,
+        "k": 100,
+        "n": 125,
+        "point": 0.8
+      },
+      "0.8": {
+        "ci": [
+          0.7214084909988655,
+          0.860701634923197
+        ],
+        "estimable": true,
+        "k": 100,
+        "n": 125,
+        "point": 0.8
+      },
+      "0.95": {
+        "ci": [
+          0.9811539940816791,
+          1.0
+        ],
+        "estimable": true,
+        "k": 200,
+        "n": 200,
+        "point": 1.0
+      },
+      "1.0": {
+        "ci": [
+          0.9630051925239981,
+          0.9999999999999999
+        ],
+        "estimable": true,
+        "k": 100,
+        "n": 100,
+        "point": 1.0
+      }
+    },
+    "composition_dependent_values": true,
+    "detail": "1.00 >= 1.00 >= 0.80 >= 0.80",
+    "monotonic": true
+  },
+  "config": {
+    "clean_tn_n": 200,
+    "decoy_n": 25,
+    "n_calls": 900,
+    "n_per_class": 100
+  },
+  "corpus_version": "scale-up/0.1.0",
+  "fpr_representative": {
+    "ci": [
+      0.0,
+      0.018846005918320894
+    ],
+    "estimable": true,
+    "k": 0,
+    "n": 200,
+    "point": 0.0
+  },
+  "mechanism_recall": {
+    "element_of_collection": {
+      "ci": [
+        0.9630051925239981,
+        0.9999999999999999
+      ],
+      "estimable": true,
+      "k": 100,
+      "n": 100,
+      "point": 1.0
+    },
+    "exact_copy": {
+      "ci": [
+        0.9630051925239981,
+        0.9999999999999999
+      ],
+      "estimable": true,
+      "k": 100,
+      "n": 100,
+      "point": 1.0
+    },
+    "hash_aliasing": {
+      "ci": [
+        0.0,
+        0.13319649395317873
+      ],
+      "estimable": true,
+      "k": 0,
+      "n": 25,
+      "point": 0.0
+    },
+    "paraphrased_derived": {
+      "ci": [
+        0.0,
+        0.03699480747600191
+      ],
+      "estimable": true,
+      "k": 0,
+      "n": 100,
+      "point": 0.0
+    },
+    "strategy_collision": {
+      "ci": [
+        0.9630051925239981,
+        0.9999999999999999
+      ],
+      "estimable": true,
+      "k": 100,
+      "n": 100,
+      "point": 1.0
+    },
+    "templated_containment": {
+      "ci": [
+        0.9630051925239981,
+        0.9999999999999999
+      ],
+      "estimable": true,
+      "k": 100,
+      "n": 100,
+      "point": 1.0
+    },
+    "verbatim_object": {
+      "ci": [
+        0.9630051925239981,
+        0.9999999999999999
+      ],
+      "estimable": true,
+      "k": 100,
+      "n": 100,
+      "point": 1.0
+    }
+  },
+  "out_of_scope_excluded": 0,
+  "preemption": {
+    "behavioural_masking": {
+      "ci": [
+        0.9630051925239981,
+        0.9999999999999999
+      ],
+      "estimable": true,
+      "k": 100,
+      "n": 100,
+      "point": 1.0
+    },
+    "correctness_pending_arm_b": true,
+    "production_fp_shadow_tp": 0
+  },
+  "strategy_precision": {
+    "content_hash": {
+      "ci": [
+        0.7214084909988655,
+        0.860701634923197
+      ],
+      "estimable": true,
+      "k": 100,
+      "n": 125,
+      "point": 0.8
+    },
+    "object_identity": {
+      "ci": [
+        0.9873565700022643,
+        0.9999999999999999
+      ],
+      "estimable": true,
+      "k": 300,
+      "n": 300,
+      "point": 1.0
+    },
+    "substring": {
+      "ci": [
+        0.7214084909988655,
+        0.860701634923197
+      ],
+      "estimable": true,
+      "k": 100,
+      "n": 125,
+      "point": 0.8
+    }
+  }
+}
