@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- AutoLineage floor raised to 0.7.1 (`autolineage>=0.7.1,<0.8` in the `lineage` and `all` extras). 0.7.1 gives every derived pandas frame its own lineage id; 0.7.0 and older recorded `parent == child` for most transforms. The previous pin (`<0.7`) also blocked every 0.7.x release.
+- README rewritten: research-prototype status, install from GitHub (not on PyPI yet), a quickstart that obtains `run_id` the way the examples do, and no compliance, HIPAA BAA, SOC 2 or enterprise-tier claims.
+
+### Fixed
+- AutoLineage records are mapped to the right node kinds. AutoLineage emits `train`, `predict`, `evaluate`, `preprocess` and `split`; RudriQ only knew `model_train` and `model_predict`, so every scikit-learn node was stored as `unknown`. Both spellings are accepted now.
+
+### Tests
+- `tests/test_autolineage_071.py` drives real pandas through AutoLineage's hooks into RudriQ storage and checks there are no self-loop edges, plus the category mapping. The self-loop guard in `DeviationRCA` stays for traces from older AutoLineage versions or other adapters.
+
 ## v0.1.0 — May 23, 2026
 
 First feature-complete release. The full originally-planned v0.1.0 scope is shipped and validated: cross-domain lineage linking, a five-metric evaluation engine, audit-report integration, and deviation-weighted root-cause analysis. 213 tests passing.

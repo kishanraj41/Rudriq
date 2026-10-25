@@ -71,12 +71,18 @@ def _autolineage_record_to_node_kind(record: Any) -> Any:
         if any(w in op_lower for w in _AL_WRITE_OPS):
             return NodeKind.DATA_WRITE
         return NodeKind.DATA_READ
-    if category == "transform":
+    # AutoLineage's categories are transform, preprocess, split, train,
+    # predict and evaluate. Before this mapping covered them, every
+    # scikit-learn node landed as UNKNOWN. "model_train"/"model_predict"
+    # are kept for traces written by other adapters.
+    if category in ("transform", "preprocess", "split"):
         return NodeKind.DATA_TRANSFORM
-    if category == "model_train":
+    if category in ("train", "model_train"):
         return NodeKind.MODEL_TRAIN
-    if category == "model_predict":
+    if category in ("predict", "model_predict"):
         return NodeKind.MODEL_PREDICT
+    if category == "evaluate":
+        return NodeKind.METRIC_EVAL
     return NodeKind.UNKNOWN
 
 

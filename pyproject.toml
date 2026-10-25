@@ -55,9 +55,10 @@ llm = [
 lineage = [
     # Auto-registration of object identity into the linker requires
     # the register_assign_id_callback API added in autolineage 0.5,
-    # and the post_record callback added in 0.6. Published to PyPI as
-    # 0.6.1 on 2026-05-15; the git-URL pin below is retired.
-    "autolineage>=0.6.1,<0.7",
+    # and the post_record callback added in 0.6. 0.7.1 is the floor:
+    # it gives every derived pandas frame its own lineage id (0.7.0
+    # and older emitted parent == child for most transforms).
+    "autolineage>=0.7.1,<0.8",
 ]
 evaluate = [
     # Semantic evaluators (retrieval_relevance, groundedness) need
@@ -81,7 +82,7 @@ pdf = [
 all = [
     "traceloop-sdk>=0.30",
     "openai>=1.0,<2.0",
-    "autolineage>=0.6.1,<0.7",
+    "autolineage>=0.7.1,<0.8",
     "fastembed>=0.3,<1.0",
     "numpy>=1.24",
     "fpdf2>=2.7",

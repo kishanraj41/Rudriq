@@ -1,184 +1,124 @@
 # RudriQ
 
-> **Self-hosted, audit-grade evidence of why AI systems fail.**
->
-> For regulated enterprises that cannot use cloud observability.
+> **Trace a bad LLM answer back to the data step that caused it.**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
-[![Status](https://img.shields.io/badge/status-pre--alpha-orange.svg)](https://github.com/kishanraj41/rudriq)
-[![Tests](https://img.shields.io/badge/tests-78%20passing-success.svg)](https://github.com/kishanraj41/rudriq)
-[![Paper](https://img.shields.io/badge/paper-SSRN-blue.svg)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=6683825)
+[![Status](https://img.shields.io/badge/status-research%20prototype-orange.svg)](https://github.com/kishanraj41/rudriq)
+[![Paper](https://img.shields.io/badge/paper-SSRN-blue.svg)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=7222278)
 
-When your AI system fails — drifts, hallucinates, returns the wrong answer — the cause is usually upstream of the LLM call. RudriQ traces failures back to the data pipeline operations that caused them, and produces audit-grade evidence designed for EU AI Act compliance, litigation defense, and AI liability insurance underwriting.
+When an LLM application gives a wrong or drifting answer, the cause is often upstream of the model call: a filter dropped the right documents, a merge duplicated rows, or retrieval returned stale text. RudriQ joins two traces that are usually kept apart:
 
-![RudriQ audit report sample](docs/images/sample_audit_report.png)
+- data operations (pandas and scikit-learn, recorded by [AutoLineage](https://github.com/kishanraj41/autolineage))
+- LLM calls (OpenAI, through [OpenLLMetry](https://github.com/traceloop/openllmetry) and OpenTelemetry)
 
-<sub>_Representative output. Lineage chains shown reflect the v0.0.6+ feature set with AutoLineage records mirrored into RudriQ storage; v0.0.5 today produces the same format with cross-domain edges to AutoLineage's tracker. See [BACKLOG.md](BACKLOG.md)._</sub>
+It links them into one graph and ranks the upstream operations most likely to explain a change. Everything runs locally: traces go to a DuckDB file on your machine, and the core makes no outbound network calls.
 
-## Why RudriQ
+**Status: research prototype.** It works on the bundled examples and in its test suite. Nobody outside the author has run it in production yet. Expect the API to change.
 
-LLM observability tools tell you what happened at the LLM call. They are excellent at this.
+## Install
 
-RudriQ is different in two specific ways:
+RudriQ is not on PyPI yet. Install it from GitHub:
 
-1. **Cross-domain trace.** We connect data operations (pandas, scikit-learn, RAG retrieval) to LLM calls (OpenAI, Anthropic) into a single causal chain. Existing observability tools start at the LLM call; we start before it.
+```bash
+pip install "rudriq[lineage,llm] @ git+https://github.com/kishanraj41/rudriq"
+```
 
-2. **Self-hosted, no cloud dependencies.** RudriQ runs entirely inside your VPC. DuckDB by default, zero outbound network calls in core. Designed for buyers in healthcare, financial services, and government who cannot use cloud-deployed observability tools.
+| Extra | What it adds |
+|---|---|
+| `lineage` | AutoLineage (>= 0.7.1) |
+| `llm` | OpenLLMetry and the OpenAI SDK |
+| `evaluate` | Optional: the evaluators |
+| `pdf` | Optional: PDF export |
 
 ## Quickstart
 
-```bash
-pip install "rudriq[all]"
-```
-
 ```python
-import rudriq.auto    # one import: lineage tracking + LLM tracing + linker
+import rudriq.auto  # wires AutoLineage, OpenLLMetry and the linker
+
+from opentelemetry import trace
+from rudriq.processors import RudriQSpanProcessor
+
+proc = RudriQSpanProcessor()
+provider = trace.get_tracer_provider()
+if hasattr(provider, "add_span_processor"):
+    provider.add_span_processor(proc)
+run_id = proc.run_id
 
 # Your existing code runs unchanged.
 import pandas as pd
-docs = pd.read_csv('docs.csv')
-docs = docs[docs['lang'] == 'en']
-
 from openai import OpenAI
-client = OpenAI()
-embeddings = client.embeddings.create(
-    model='text-embedding-3-small',
-    input=docs['text'].tolist(),
-)
 
-# Generate the audit report — schema-versioned, deterministic.
+docs = pd.read_csv("docs.csv")
+docs = docs[docs["lang"] == "en"]
+OpenAI().embeddings.create(model="text-embedding-3-small", input=docs["text"].tolist())
+
 from rudriq.export.audit import export_audit_markdown
 print(export_audit_markdown(run_id))
 ```
 
-Or from the CLI:
+From the command line:
 
 ```bash
 rudriq audit --run-id <id> --format markdown --output report.md
+rudriq diagnose --run-id <id> --target <node-id>   # ranked upstream suspects
 ```
 
-## What you get
+## How the link is made
 
-A unified trace covering every data operation and every LLM call, with cross-domain causal links automatically attributed. Same data, two views — JSON for machine consumers, Markdown for an auditor reading the report directly.
-
-```
-Run ID:     abc-123
-Schema:     rudriq.audit/1.0
-Started:    2026-05-04T14:00:00+00:00
-Total operations: 7  (data: 4, LLM: 2, other: 1)
-LLM call attribution: 2/2 linked to upstream
-
-LLM Lineage Chains
-  openai.embeddings.create
-    -> depth 1: pandas.filter        (rows: 1000 -> 250)
-    -> depth 2: pandas.read_csv      (path: docs.csv)
-
-  openai.chat.completions.create
-    -> depth 1: rudriq.prompt_assembly  (template: rag_v2)
-    -> depth 2: pandas.merge          (left: filtered_docs)
-    -> depth 3: openai.embeddings.create  (linked above)
-```
-
-Every operation, every parameter, every cross-domain link, in your local DuckDB. Deterministic: same trace produces byte-identical JSON across calls and across DuckDB instances. See [docs/sample_audit_report.md](docs/sample_audit_report.md) for a real exporter output.
-
-## Architecture
-
-RudriQ is OpenTelemetry-compatible, not OpenTelemetry-bound. We use OTel for ingestion (so we get [OpenLLMetry](https://github.com/traceloop/openllmetry)'s SDK coverage for free) and for export (so we work with your existing observability stack), but our internal data model is a richer canonical schema with first-class causal edges, lineage links across domains, and audit metadata.
-
-The cross-domain linker uses three matching strategies in order of confidence:
+The linker tries three strategies in order and keeps the first one that matches:
 
 | Strategy | Confidence | Mechanism |
 |---|---|---|
-| Object identity | 1.0 | Python `id()` of LLM input matches a tracked AutoLineage output |
-| Content hash | 0.8 | SHA-256 of input matches a recorded operation output |
-| Name match | 0.5 | Heuristic correlation by variable/column name (v0.1) |
+| Object identity | 1.0 | The object passed to the LLM call is the same Python object AutoLineage recorded as an operation's output |
+| Content hash | 0.8 | A SHA-256 hash of the input matches a recorded output |
+| Retrieval-aware substring | 0.7 / 0.5 | Tracked text appears inside the prompt |
 
-The first matching strategy wins. Match results are persisted as `LINEAGE_LINK` edges in the canonical TraceGraph and surfaced in audit reports. v0.0.4 added automatic registration so neither `register_object_identity` nor `record_llm_input` are visible in user code; the demo notebook is plain pandas + openai.
+On the realistic example, 23 of 43 LLM calls are linked. The other 20 are query embeddings built from fresh strings with no upstream data, and they are left unlinked on purpose. The method and its measured accuracy are in the [RudriQ linker paper](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=7222278) (SSRN preprint, not peer reviewed).
 
-The data lineage substrate is **[AutoLineage](https://github.com/kishanraj41/autolineage)** (v0.5+), which captures pandas, scikit-learn, and PySpark operations and exposes a callback API that RudriQ wires into.
+Root-cause ranking (`rudriq diagnose`) scores each upstream operation on three things:
 
-## Data handling and content capture
+- how far it deviates from a baseline run
+- how close it sits in the lineage graph
+- how confident the links on the path are
 
-RudriQ is built for regulated environments. **By default, RudriQ does not store the content of your prompts, LLM responses, or source documents.** It captures operation metadata — shapes, timings, model names, token counts, lineage links — but not the text itself.
+The output is a ranked list of suspects, not a causal proof.
 
-### Enabling content capture for evaluation
+## Data handling
 
-RudriQ's evaluation engine (groundedness, retrieval relevance) needs text content to compute semantic scores. To enable it, set:
+**Default: metadata only.** RudriQ stores shapes, timings, model names, token counts and lineage links. It does not store prompt, response or document text.
 
-```bash
-export RUDRIQ_CAPTURE_CONTENT=true
-```
+**Opt-in content capture.** The evaluators (groundedness, retrieval relevance) need text. To enable them, set `RUDRIQ_CAPTURE_CONTENT=true`. With capture on:
 
-When enabled:
+- RudriQ stores truncated previews: 500 characters by default, set with `RUDRIQ_PREVIEW_CHARS` (50–10000).
+- Previews go only to the local DuckDB file (`~/.rudriq/traces.duckdb`).
+- The flag is read at process start. Turning it off later does not redact runs already captured.
 
-- RudriQ stores **truncated previews** (default 500 characters, configurable via `RUDRIQ_PREVIEW_CHARS`, clamped to 50–10000) of prompts, responses, and document content.
-- Previews are stored **only in your local DuckDB** (`~/.rudriq/traces.duckdb`). RudriQ Core makes no outbound network calls; content never leaves your environment.
-- The flag is read at process start (RudriQ propagates it to OpenLLMetry's content capture and to the AutoLineage mirror callback). Toggling it does not retroactively redact previously captured runs.
-- You can stop capturing at any time by unsetting the variable. Previously stored previews remain in the local database until you delete the run.
+If your data contains PII or PHI, keep capture off or use synthetic data. Review the stored previews before you share an export.
 
-### For compliance teams
+## Examples
 
-If your prompts or documents contain PII or PHI, evaluate whether content capture is appropriate for your environment. Recommended patterns:
-
-- Run evaluation in non-production environments with synthetic data; keep capture disabled in production and rely on metadata-only tracing there.
-- Use a short `RUDRIQ_PREVIEW_CHARS` limit (e.g. 100) to minimize stored content while keeping enough for semantic evaluation.
-- Audit the captured previews directly in DuckDB before sharing exports with auditors:
-
-  ```sql
-  SELECT node_id, metadata FROM nodes
-  WHERE json_extract(metadata, '$."rudriq.prompt_preview"') IS NOT NULL;
-  ```
-
-RudriQ's default-off posture means you opt into content storage deliberately, never by accident.
-
-## Status: pre-alpha (v0.0.5)
-
-Currently in active 30-day sprint development. v1.0 target: November 2026.
-
-| Version | Target | Status |
-|---|---|---|
-| v0.0.5 | May 4, 2026 | ✅ Audit JSON + Markdown exporter (current) |
-| v0.0.6 | May 11, 2026 | 🚧 AutoLineage record mirroring; production Traceloop flow verification |
-| v0.2.0 | May 25, 2026 | ⏳ Evaluation engine + deviation-weighted root-cause analysis |
-| v0.3.0 | Jun 1, 2026 | ⏳ PDF export + design partner outreach |
-| v1.0.0 | Nov 2026 | ⏳ Air-gapped install, HIPAA BAA capable, SOC 2 Type II in progress |
-
-See [BACKLOG.md](BACKLOG.md) for tracked deferrals.
-
-## Run the demos
-
-Two notebooks under [`examples/`](examples/) — one toy-scale, one production-shaped.
+All examples run offline. The OpenAI HTTP layer is mocked, so you need no API key.
 
 ```bash
-git clone https://github.com/kishanraj41/rudriq.git
-cd rudriq
+git clone https://github.com/kishanraj41/rudriq.git && cd rudriq
 pip install -e ".[dev,llm,lineage]"
-pytest tests/                                          # 95+ passing
-jupyter notebook examples/rag_with_lineage.ipynb       # toy: 1 read, 1 filter, 1 LLM call
-jupyter notebook examples/realistic_rag_pipeline.ipynb # realistic: 5 CSVs, ~200 ops, 43 LLM calls
+pytest tests/
+jupyter notebook examples/rag_with_lineage.ipynb        # 1 read, 1 filter, 1 LLM call
+jupyter notebook examples/realistic_rag_pipeline.ipynb  # 5 CSVs, ~200 operations, 43 LLM calls
+jupyter notebook examples/drift_demo.ipynb              # baseline vs. a perturbed run
 ```
 
-The toy demo (`rag_with_lineage.ipynb`) is the four-cell intro that walks through the mechanism. The realistic demo (`realistic_rag_pipeline.ipynb`) runs an enterprise-shaped RAG pipeline — 5 source documents through ~200 pandas operations, 3 batched embedding calls and 20 query+chat cycles — and produces a complete audit report ready for compliance review. Both run offline (mocked OpenAI HTTP layer) and need no API keys.
+## Next
 
-### See it on a realistic workload
+These are plans, not promises:
 
-For design partner outreach and to evaluate RudriQ on something closer to your own workload, see [`examples/realistic_rag_pipeline.ipynb`](examples/realistic_rag_pipeline.ipynb). On v0.0.8 the retrieval-aware substring linker covers **23/43 LLM calls** — every batch embedding (object identity) and every chat completion (substring matching against tracked content embedded in the prompt). The 20 query embeddings remain unlinked by design: they're freshly-constructed strings with no upstream tracked source, and matching them on coincidental similarity would produce false positives that destroy the trust value of the audit report.
+- `rudriq demo`: one command, offline, ends in a report.
+- `rudriq mcp`: a read-only MCP server, so an assistant can ask why a run changed.
+- A PyPI release.
 
-### Proof that drift detection works
+Anything beyond that waits for what early users ask for. See [BACKLOG.md](BACKLOG.md).
 
-[`examples/drift_demo.ipynb`](examples/drift_demo.ipynb) is the design-partner answer to "does drift actually work?" — a side-by-side contrast: baseline vs itself produces `drift_response = 1.000`, baseline vs the perturbed run (same prompts, rewritten responses) drops to `0.820` with real fastembed embeddings, and the new unmatched call is flagged as "new behavior." The notebook is honest about the magnitude — small sentence-embedding models cluster claim-style sentences tightly, so the drop reflects both the perturbation size and the embedding model's discriminating power.
+## License and author
 
-### The one-scroll pitch
-
-[`examples/design_partner_demo.ipynb`](examples/design_partner_demo.ipynb) walks a healthcare-AI ML lead through the whole story end-to-end in one scroll: realistic RAG pipeline → one-import capture → unified cross-domain trace (11/11 LLM calls linked in this run) → depth-11 lineage walk → five-evaluator quality scoring (all green) → ranked root-cause suspects with evidence → deterministic hashable audit report as Markdown/JSON/PDF. This is the artifact to screen-share on a first call.
-
-## License
-
-MIT. Use it however you want. Compliance buyers: a paid Enterprise tier with air-gapped install support, dedicated support, and certification path is in development for late 2026.
-
-## Author
-
-Built by [Kishan Raj VG](https://github.com/kishanraj41) at RudriQ Research, Austin, TX.
-
-Author of [AutoLineage: Operation-Level Data Lineage for Python ML Pipelines via Import-Time Hooking](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=6683825) (SSRN preprint, 2026), the data lineage substrate RudriQ builds on. JOSS reviewer.
+MIT. Built by [Kishan Raj VG](https://github.com/kishanraj41) in Austin, TX, who also wrote the [AutoLineage preprint](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=6683825).
