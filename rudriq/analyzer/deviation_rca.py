@@ -109,10 +109,11 @@ class DeviationRCA:
         # BFS upstream tracking (distance, cumulative path confidence).
         # ``visited`` guards against revisiting; ``best_by_id`` keeps at
         # most one candidate per upstream node, holding the highest
-        # score across all paths that reach it. Live traces can carry
-        # self-loop edges (autolineage emits ``parent == child`` for
-        # some pandas operations) and parallel edges between the same
-        # pair; both would otherwise produce duplicate entries.
+        # score across all paths that reach it. AutoLineage 0.7.1 no
+        # longer emits ``parent == child`` for derived pandas frames
+        # (tests/test_autolineage_071.py drives real pandas to check),
+        # but traces from 0.7.0 and older, or from other adapters, can
+        # still carry self-loops and parallel edges, so the guard stays.
         best_by_id: dict[str, RootCauseCandidate] = {}
         visited: set[str] = set()
         queue: deque[tuple[str, int, float]] = deque([(target_node_id, 0, 1.0)])
@@ -125,9 +126,8 @@ class DeviationRCA:
 
             for edge in upstream_edges.get(node_id, []):
                 parent_id = edge.parent_id
-                # Skip self-loops — they're meaningless for upstream
-                # analysis and we've seen them in the wild on
-                # autolineage.select records.
+                # Skip self-loops: meaningless for upstream analysis.
+                # Seen on autolineage<=0.7.0 select/filter records.
                 if parent_id == node_id:
                     continue
                 parent = nodes_by_id.get(parent_id)
