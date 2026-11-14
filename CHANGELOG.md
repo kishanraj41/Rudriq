@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Changed
+- AutoLineage cap raised from `<0.8` to `<0.9` (`autolineage>=0.7.1,<0.9` in the `lineage` and `all` extras) so 0.8.0 can be installed. The floor stays 0.7.1.
 - AutoLineage floor raised to 0.7.1 (`autolineage>=0.7.1,<0.8` in the `lineage` and `all` extras). 0.7.1 gives every derived pandas frame its own lineage id; 0.7.0 and older recorded `parent == child` for most transforms. The previous pin (`<0.7`) also blocked every 0.7.x release.
 - README rewritten: research-prototype status, install from GitHub (not on PyPI yet), a quickstart that obtains `run_id` the way the examples do, and no compliance, HIPAA BAA, SOC 2 or enterprise-tier claims.
 
